@@ -18,4 +18,5 @@ endif()
 add_library(hyoshi_engine INTERFACE)
 add_library(hyoshi::engine ALIAS hyoshi_engine)
 target_link_libraries(hyoshi_engine INTERFACE hyoshi::core hyoshi::platform hyoshi::rhi hyoshi::renderer hyoshi::debug
-    hyoshi::audio hyoshi::rhythm hyoshi::input hyoshi::ui hyoshi::songs hyoshi::app hyoshi::mania hyoshi::osu_import)
+    hyoshi::audio hyoshi::rhythm hyoshi::input hyoshi::ui hyoshi::songs hyoshi::app hyoshi::mania hyoshi::circle
+    hyoshi::osu_import)

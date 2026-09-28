@@ -2,7 +2,7 @@
 
 For whoever works on Hyoshi Engine next, human or AI. Read this first, then [README.md](../README.md) (modules, build, making a game, development hooks) and [DESIGN.md](DESIGN.md) (the plan, with "As built" notes where the code differs). Update this file at the end of every working session.
 
-Last updated: 2026-09-28, the editor framework's milestone 0 ([ADR 0002](decisions/0002-editor-framework.md)) and the first macOS build since mid M4. Before that, 2026-09-28, the repository's first commit. Before that, the engine and its first game shared one private repository; on 2026-09-28 they were split. The engine starts here with fresh history. The game keeps the old history in its own repository and uses this one as a git submodule.
+Last updated: 2026-09-28, the Circle mode (M8, started early; DESIGN.md section 16.4), chart readers for the song library, and `SpriteBatch::KeepOrder`, and scenes that own textures surviving a scene switch. Before that, 2026-09-28, the editor framework's milestone 0 ([ADR 0002](decisions/0002-editor-framework.md)) and the first macOS build since mid M4. Before that, 2026-09-28, the repository's first commit. Before that, the engine and its first game shared one private repository; on 2026-09-28 they were split. The engine starts here with fresh history. The game keeps the old history in its own repository and uses this one as a git submodule.
 
 ## Where things stand
 
@@ -15,14 +15,17 @@ Hyoshi Engine is a mobile-first C++20 rhythm game engine (Vulkan through an RHI,
 | M2 2D renderer | Done (10,000 sprites at 120 Hz) | Done, with text and logos | Menus, text, and logos render on the emulator |
 | M3 Audio and song clock | Done, stress-tested | Done, stress-tested | AAudio plays on the emulator; not stress-tested |
 | M4 First playable (Mania) | The parts are here; the first game is built on them | Same | The first game plays on the emulator |
+| M8 Circle mode (early) | Plays real osu!standard maps in a second game; sliders held, not followed | Not built | Not built |
 
 **macOS, 2026-09-28: builds again, but validation isn't clean.** The engine builds on its own and as a game's subdirectory with Apple Clang, and the unit tests, `format-check`, and `tidy` pass. But every app now exits with a failure code: the validation layer reports 4 portability errors at startup, `vkCreateImageView(): swizzle is disabled for this device`, from the one-channel texture views in `engine/rhi/vulkan/VulkanResources.cpp:165` (swizzled to 1, 1, 1, R), which MoltenVK's portability subset doesn't allow by default. The engine at its first commit (`98937f9`) does the same, so the editor didn't cause it; when it began isn't known (the Mac hadn't built since mid M4). Not fixed yet. Two ways to fix it: turn on the portability subset's `imageViewFormatSwizzle` feature if MoltenVK offers it, or read the red channel in the shaders and drop the swizzle. The other checks (clock stress, surface stress) haven't been run on the Mac since mid M4.
+
+**The Circle mode** (`modes/circle`, DESIGN.md section 16.4) plays osu!standard maps: import, slider paths, stacking, lazer's note lock, scoring, autoplay, and the playfield. A second game is built on it. What's missing for M8: slider ticks, repeats, tails, and follow judgment (a slider head is a Great and that's all), spinner judgment, and translucent slider bodies (they wait for render targets). The song library now takes a chart reader (`LibraryOptions`), so a game lists only its mode's charts; the default is Mania's, as before.
 
 **The editor framework** (`engine/editor`, ADR 0002) is at milestone 0: a game's editor runs the game full-window with a menu bar and dockable ImGui panels over it. The first game's editor, with one panel, opens on the Mac (screenshot). Next is milestone 1: the chart and timeline panel, and playing from a point in a chart.
 
 ### Verified
 
-By script (the development hooks, screenshots), by unit tests (67 cases), and through the first game built on it, on Windows unless noted.
+By script (the development hooks, screenshots), by unit tests (81 cases), and through the games built on it, on Windows unless noted.
 
 - The clock never goes backwards across device stalls and random seeks, and no scheduled clicks are late (`HYOSHI_SCENE=clock HYOSHI_STRESS_SEEK=1 HYOSHI_STRESS_AUDIO=1`, in the sample). No resyncs on macOS; on Windows a stress run sometimes has one (see "Known quirks").
 - Autoplay scores 1,000,000 through the Mania judge, including across device stalls, and on real osu!mania maps (MP3), on Windows, macOS (before the UI work), and the Android emulator.
@@ -32,6 +35,7 @@ By script (the development hooks, screenshots), by unit tests (67 cases), and th
 - Logo distance fields: unit tests for edges, trimming, faint noise, and specks. The splash renders in landscape and portrait.
 - The sample (`samples/metronome`) builds and runs; the engine builds on its own (`cmake --preset windows-debug`) and as a game's subdirectory.
 - **macOS, 2026-09-28:** the engine builds on its own (with the sample) and as the game's subdirectory; 67 unit tests, `format-check`, and `tidy` pass. The game's autoplay scores 1,000,000 on the built-in drill. The game's editor opens with its menu bar and panel over the song select (screenshot), keeps it up through an autoplay run to the results, and shuts down cleanly. Validation isn't clean (above).
+- **The Circle mode, macOS, 2026-09-28:** unit tests for the importer (old file formats, red lines resetting slider velocity), stacking, the judge (windows, misses, note lock, chords, holds), autoplay, determinism at three frame rates, and scoring. Headless, all 52 difficulties of 10 real osu!standard maps import without warnings and autoplay scores every note a Great. In the second game, autoplay plays whole maps through to the results with nothing but Greats (201, 669, and 1,658 judgments, AR 4 to 9.8, with and without a lead-in), and screenshots show the playfield: snaking and reversing sliders, a spinner, a deep stack, follow points, combo numbers. Switching scenes no longer frees a scene's textures while the frame still draws them (it crashed on the way to the results before). The first game, with its editor, builds without warnings on these engine changes, and its autoplay still scores 1,000,000 on the built-in drill through to the results.
 - **Android emulator** (API 36, x86_64, Vulkan 1.3 through gfxstream, AAudio at 48 kHz): the game's APK builds for arm64-v8a and x86_64 through `platforms/android/hyoshi-app.gradle`; rendering, rotation, the safe area, immersive fullscreen, the back button (as Escape), and touch with OS timestamps (0.4 to 17 ms before the frame's pump, so SDL passes the event time through: the DESIGN.md section 12.3 question, answered for the emulator). Debug APKs bundle a game's `content/charts` and unpack it on first launch.
 
 ### Not verified
@@ -41,6 +45,7 @@ By script (the development hooks, screenshots), by unit tests (67 cases), and th
 - **FLAC and Ogg Vorbis decoding.** WAV and MP3 are exercised.
 - **macOS**: validation (above), and the stress checks since mid M4.
 - **The editor framework on Windows and Android.** Not built there after the change (2026-09-28): the `EditorLayer` changes to `Application`, the ImGui docking branch, and `hyoshi_add_editor` with MSVC; on Android, that `engine/editor` and `hyoshi_add_editor` stay out of the build, and that the docking branch still builds for the game. Build both before relying on them.
+- **The Circle mode on Windows and Android.** Not built there, nor the engine changes that came with it (2026-09-28: `SpriteBatch::KeepOrder`, `Application`'s ended scene, the song library's chart readers). And no one has played it by hand yet: real mouse and touch aim, and how its timing feels.
 - **The editor by hand**: docking, the View menu, File > Quit, and typing into a panel while a game runs (the ImGui windows should take the keys). Which panels are open isn't saved between runs; where they are is.
 
 ## Map of the code
@@ -51,16 +56,17 @@ By script (the development hooks, screenshots), by unit tests (67 cases), and th
 | `engine/platform` | SDL3: window, events into `InputQueue` (keys with repeats marked, wheel, touch, pointer), lifecycle, host clock, base, user data, asset, and shared storage paths, safe area, orientation, window icon, `LoadFile` / `SaveFile` (atomic) / `MakeDirectory` |
 | `engine/input` | `InputEvent`, `InputQueue` (sorted by host time) |
 | `engine/rhi` | `IRenderDevice` and the Vulkan backend (volk, VMA, MoltenVK on macOS) |
-| `engine/renderer` | `Camera2D` (short side 1080), `SpriteBatch` (sprites can be distance fields; `WithAlpha`), `TextRenderer` (runtime SDF glyphs from TTF/OTF, atlas pages), `Image` (PNG/JPEG, distance fields from alpha, textures) |
+| `engine/renderer` | `Camera2D` (short side 1080), `SpriteBatch` (sprites can be distance fields; `WithAlpha`; `KeepOrder` layers draw in submission order), `TextRenderer` (runtime SDF glyphs from TTF/OTF, atlas pages), `Image` (PNG/JPEG, distance fields from alpha, textures) |
 | `engine/debug` | Dear ImGui overlay (positions saved in `imgui.ini` in the user data directory; the editor's in `editor-imgui.ini`, with docking on) |
 | `engine/audio` | `IAudioBackend`, `Mixer` (runs in the callback), miniaudio backend and decoder, `Synth` (clicks, metronome track) |
 | `engine/rhythm` | `SongClock`, chart format (`ChartFile`), `ScrollMap`, `Judgment`, `ScoreSystem`, `OffsetCalibration` |
-| `engine/songs` | `Charts` (`ChartSource`, `GetChartKey`, the built-in drill, loading `.osu` / `.rchart.json`), `SongLibrary` (scans song folders on a worker; `UnpackBundledSongs`), `SongPlayer` (music and the song clock) |
+| `engine/songs` | `Charts` (`ChartSource`, `GetChartKey`, the built-in drill, loading `.osu` / `.rchart.json` as Mania, `.osu` as Circle), `SongLibrary` (scans song folders on a worker with a chart reader from `LibraryOptions`; `UnpackBundledSongs`), `SongPlayer` (music and the song clock) |
 | `engine/ui` | `Ui` (immediate-mode widgets, layout rectangles, colors, layers), `Logo` (images as distance fields, drawn to fit) |
 | `engine/app` | `Application` (main loop, scene switching with a fade, lifecycle, development hooks, exit checks), `Game` (the interface a game implements), `EditorLayer` (the editor's hook into the main loop), `Scene`, `ClockDemo` (`HYOSHI_SCENE=clock`), the splash |
 | `engine/editor` | Desktop only. `Editor` (the interface a game's editor implements), `Panel`, `EditorServices`, `Run`; the menu bar and dock space (ADR 0002) |
 | `modes/mania` | `ManiaChart`, `ManiaJudge` (+ autoplay), `ManiaPlayfield` (drawing) |
-| `tools/osu-import` | `.osu` to `.rchart.json` converter (library + CLI) |
+| `modes/circle` | `CircleChart` (paths, stacking, combo numbers: `FinishCircleChart`), `CircleJudge` (+ autoplay), `CircleScore`, `CirclePlayfield` (drawing, `CircleLayout`) |
+| `tools/osu-import` | `ImportOsuMania`, `ImportOsuStandard` (`OsuText.h` holds the shared parsing), and the osu!mania to `.rchart.json` CLI |
 | `tools/asset-cooker` | `hyoshi-asset-cooker icons`: a game's icons from its logo |
 | `samples/metronome` | The smallest game: splash, then the clock demo |
 | `platforms/windows` | The UTF-8 code page manifest every executable embeds |
@@ -85,7 +91,7 @@ A game's editor (ADR 0002) is a second executable from the same game code, built
 
 ### How a frame flows
 
-`Application::Run`: pump events, take the input queue, F1 toggles the overlay, `SpriteBatch::Begin`, `Game::Update`, then `RunScene`: `Ui::BeginFrame` reads the input, and the scene's `RunFrame` updates and draws through the UI in one call. A scene's `SwitchTo` takes effect after the frame; `EndScene` first logs the old one's summary and keeps its failed check and backward steps for the exit checks. `RenderFrame` then adds the stress sprites and the fade, flushes new glyphs (`TextRenderer::Flush`), and ends the sprite batch.
+`Application::Run`: pump events, take the input queue, F1 toggles the overlay, `SpriteBatch::Begin`, `Game::Update`, then `RunScene`: `Ui::BeginFrame` reads the input, and the scene's `RunFrame` updates and draws through the UI in one call. A scene's `SwitchTo` takes effect after the scene's `RunFrame`: `EndScene` logs the old one's summary and keeps its failed check and backward steps for the exit checks, and the new scene runs from the next frame. The old scene is destroyed only after the frame is recorded, because its sprites, and so its textures, are still in the frame's batch (a scene that destroyed its texture in its destructor crashed the switch until 2026-09-28). `RenderFrame` then adds the stress sprites and the fade, flushes new glyphs (`TextRenderer::Flush`), and ends the sprite batch.
 
 ## Invariants: don't break these
 
@@ -140,13 +146,14 @@ Posting key messages (`WM_KEYDOWN`/`WM_KEYUP`) to the window drives an app witho
 - **Stale clangd.** clangd often reports stale "file not found" errors for new files. Trust the build.
 - **Trackpads.** SDL reports Mac trackpad fingers as touches from an indirect device. `Platform` drops those, so only direct devices (touchscreens) produce touch input.
 - **stb_truetype's SDF and cubic curves.** `stbtt_GetGlyphSDF` ignores cubic segments, so CFF fonts (Noto Sans JP's `.otf`) lost their round letters. `TextRenderer` computes the field itself from the flattened outline; don't switch back.
-- **Sprite order within a layer.** `SpriteBatch` sorts a layer's sprites by texture, so a rounded panel (circle texture), a plain rectangle (white texture), and text (atlas pages) on one layer draw in texture order, not call order. Stack things on different layers.
+- **Sprite order within a layer.** `SpriteBatch` sorts a layer's sprites by texture, so a rounded panel (circle texture), a plain rectangle (white texture), and text (atlas pages) on one layer draw in texture order, not call order. Stack things on different layers, or call `KeepOrder(layer)` for that frame when many things must overlap in order (the circle playfield's notes and their numbers); each texture change in such a layer is a draw call.
+- **Layers run out.** The app's fade is at `ui::layers::FADE` (60) in the same sprite batch, and the HUD at 20, so a playfield lives in the layers between. The circle playfield takes five.
 - **MSVC vs clang.** Each accepts things the other rejects: libc++ includes some standard headers transitively that MSVC's library doesn't (include what you use), and clang rejects a forward declaration that collides with a using-declaration where MSVC compiled it (clang-tidy caught it). Build or tidy with both.
 - **Windows: CRLF checkout.** With `core.autocrlf=true`, the working tree has CRLF line endings and commits are normalized to LF. The build, tests, and format-check pass either way.
 - **Windows: "'vswhere.exe' is not recognized".** The developer environment script prints this on every entry. It's harmless.
 - **Windows: key timestamps are coarse.** SDL 3.4 stamps Windows key and mouse messages from `GetMessageTime`, which moves in 15 to 16 ms steps, as coarse as the ±16 ms Perfect window. The likely fix is raw input (`WM_INPUT`) on a dedicated thread, stamped with `QueryPerformanceCounter` (DESIGN.md section 12.3).
 - **Android: bionic's `PAGE_SIZE` macro.** Bionic defines `PAGE_SIZE` in `<bits/page_size.h>`, which the standard headers pull in, so a constant by that name fails to compile (it was `TextRenderer`'s; now `ATLAS_PAGE_SIZE`). Avoid names that are common C macros.
-- **Android: no floating-point `std::from_chars`.** The NDK's libc++ (LLVM 18) only has the integer overloads. `OsuManiaImporter`'s `ParseNumber` falls back to `strtod` for libc++ before 20; nothing may call `setlocale`, or that fallback reads commas.
+- **Android: no floating-point `std::from_chars`.** The NDK's libc++ (LLVM 18) only has the integer overloads. The importers' `ParseNumber` (`OsuText.h`) falls back to `strtod` for libc++ before 20; nothing may call `setlocale`, or that fallback reads commas.
 - **Android: `sdkmanager` from PowerShell.** It's a `.bat`, and cmd splits `cmake;4.1.2` at the semicolon: quote it inside a `cmd /c "..."` string. It prints that it's deprecated in favour of `android sdk`; it still works.
 - **Android: `local.properties`.** Use forward slashes in `sdk.dir`; backslashes are escapes in a properties file.
 - **Android: busy folders.** On Windows, the Gradle daemon (`gradlew --stop`) and the adb server (`adb kill-server`) keep the folder they started in open, so it can't be renamed or moved.
@@ -168,4 +175,5 @@ Posting key messages (`WM_KEYDOWN`/`WM_KEYUP`) to the window drives an app witho
 5. Offsets per output route (DESIGN.md section 11.5), and a calibration scene (M5).
 6. CI (GitHub Actions) running the unit tests and replay fixtures on macOS and Windows, Tracy, ADR 0001.
 7. Windows, when it matters for play: precise key timestamps.
-8. The editor framework's milestone 1 (ADR 0002): the chart and timeline panel (DESIGN.md section 19.4), undo, file dialogs, and a play-mode hook so the game's gameplay starts from a point in the chart. Then milestone 2: RHI render targets and a camera per viewport, so the game draws inside a panel.
+8. Circle (M8): slider ticks, repeats, tails, and follow judgment, with the follow radius and pointer tracking (the judge already records Moves); spinner judgment; then build the mode on Windows and Android.
+9. The editor framework's milestone 1 (ADR 0002): the chart and timeline panel (DESIGN.md section 19.4), undo, file dialogs, and a play-mode hook so the game's gameplay starts from a point in the chart. Then milestone 2: RHI render targets and a camera per viewport, so the game draws inside a panel. Render targets also let the circle playfield draw translucent slider bodies.

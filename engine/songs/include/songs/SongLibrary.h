@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <future>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,8 @@ struct LibraryChart
     std::string AudioPath;
     // Where the song select's preview starts.
     hyoshi::SongTimeUs PreviewUs = 0;
+    // The chart's background image, or empty.
+    std::string BackgroundPath;
 };
 
 // One song: the difficulties of one map set with the same artist and title.
@@ -40,12 +43,28 @@ struct LibrarySong
     std::vector<LibraryChart> Charts;
 };
 
-// The songs in the song folders: map folders holding osu!mania .osu files or .rchart.json charts,
-// and charts directly in a song folder. Scans run on a worker. The built-in chart is always there.
+// Reads one chart file for the library: its details, or nothing if it isn't a chart the game
+// plays. Runs on a worker, so it only reads the file.
+using ChartReader = std::optional<LibraryChart> (*)(const std::string& path);
+
+// The engine's readers: Mania charts (.rchart.json and osu!mania .osu), and circle charts
+// (osu!standard .osu).
+std::optional<LibraryChart> ReadManiaChart(const std::string& path);
+std::optional<LibraryChart> ReadCircleChart(const std::string& path);
+
+struct LibraryOptions
+{
+    ChartReader Reader = ReadManiaChart;
+    // The built-in Mania chart, listed last.
+    bool HasBuiltInChart = true;
+};
+
+// The songs in the song folders: map folders holding chart files (.osu or .rchart.json), and
+// charts directly in a song folder, read with the options' reader. Scans run on a worker.
 class SongLibrary
 {
 public:
-    explicit SongLibrary(hyoshi::JobSystem& jobs);
+    explicit SongLibrary(hyoshi::JobSystem& jobs, LibraryOptions options = {});
 
     void SetFolders(std::vector<std::string> folders);
 
@@ -65,7 +84,7 @@ public:
         return pendingScan.valid();
     }
 
-    // Sorted by artist and title, with the built-in chart last.
+    // Sorted by artist and title, with the built-in chart (if the options have it) last.
     const std::vector<LibrarySong>& GetSongs() const
     {
         return songs;
@@ -82,6 +101,7 @@ public:
 
 private:
     hyoshi::JobSystem& jobs;
+    LibraryOptions options;
     std::vector<std::string> folders;
     std::vector<LibrarySong> songs;
     std::future<std::vector<LibrarySong>> pendingScan;
@@ -89,7 +109,7 @@ private:
 };
 
 // Scans the folders; exposed for tests.
-std::vector<LibrarySong> ScanSongFolders(const std::vector<std::string>& folders);
+std::vector<LibrarySong> ScanSongFolders(const std::vector<std::string>& folders, const LibraryOptions& options = {});
 
 // Debug APKs carry the maps from content/charts as assets in dev-songs/, listed with their sizes
 // in dev-songs/index.txt (platforms/android/app/build.gradle). Assets aren't files the library

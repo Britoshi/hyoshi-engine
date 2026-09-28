@@ -46,7 +46,8 @@ struct Sprite
     // Invalid means a solid color.
     rhi::TextureHandle Texture;
     // Lower layers draw first. Within a layer, sprites are grouped by texture, so sprites that must
-    // overlap in a specific order belong in different layers.
+    // overlap in a specific order belong in different layers, or in a layer that keeps its order
+    // (SpriteBatch::KeepOrder).
     int32_t Layer = 0;
     // The texture's alpha is a signed distance field (glyphs from TextRenderer): the shape's edge
     // is at 0.5, drawn anti-aliased at any scale.
@@ -62,6 +63,10 @@ public:
     void Shutdown();
 
     void Begin(const Camera2D& camera);
+    // Until End, sprites in this layer draw in the order they were submitted, whatever their
+    // textures: painter's order for things drawn back to front, like overlapping notes each with
+    // text on them. Each change of texture costs a draw call.
+    void KeepOrder(int32_t layer);
     void Draw(const Sprite& sprite);
     void DrawRect(glm::vec2 topLeft, glm::vec2 size, Color color, int32_t layer = 0);
     // Sorts, uploads, and records the draws. Call inside a render pass.
@@ -94,6 +99,8 @@ private:
     {
         int32_t Layer;
         rhi::TextureHandle Texture;
+        // The texture's sort key, or 0 in a layer that keeps its order.
+        uint64_t TextureKey;
         Instance Data;
     };
 
@@ -109,6 +116,7 @@ private:
 
     ClipTransform clipTransform;
     std::vector<Entry> entries;
+    std::vector<int32_t> orderedLayers;
     std::vector<Instance> instances;
     uint32_t lastSpriteCount = 0;
     uint32_t lastDrawCallCount = 0;

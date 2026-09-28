@@ -303,6 +303,7 @@ int Application::Run()
 
         RenderFrame(frameSeconds);
         device->EndFrameAndPresent();
+        endedScene.reset();
         ++frameCount;
     }
 
@@ -567,17 +568,17 @@ void Application::RunScene(HostTimeNs now, float deltaSeconds)
     scene->RunFrame(frame, *ui);
     if (std::unique_ptr<Scene> next = scene->TakeNextScene())
     {
-        EndScene();
+        endedScene = EndScene();
         scene = std::move(next);
         sceneFade = 1.0f;
     }
 }
 
-void Application::EndScene()
+std::unique_ptr<Scene> Application::EndScene()
 {
     if (!scene)
     {
-        return;
+        return nullptr;
     }
     scene->LogSummary();
     hasFailedCheck = hasFailedCheck || scene->HasFailedCheck();
@@ -585,8 +586,8 @@ void Application::EndScene()
     {
         backwardSteps += player->GetBackwardSteps();
     }
-    scene.reset();
     clockDemo = nullptr;
+    return std::move(scene);
 }
 
 void Application::Shutdown()
@@ -596,6 +597,7 @@ void Application::Shutdown()
         game.Save();
     }
     scene.reset();
+    endedScene.reset();
     clockDemo = nullptr;
     if (services)
     {

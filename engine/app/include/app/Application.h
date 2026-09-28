@@ -136,8 +136,9 @@ private:
     void SpawnDemoSprites(uint32_t count);
     void Update(float deltaSeconds);
     void RunScene(HostTimeNs now, float deltaSeconds);
-    // Ends the current scene, keeping what the exit checks need.
-    void EndScene();
+    // Ends the current scene, keeping what the exit checks need, and hands it back to be destroyed
+    // once nothing refers to it.
+    std::unique_ptr<Scene> EndScene();
     void RenderFrame(float deltaSeconds);
     float GetAverageFrameMs() const;
     void BuildStatsWindow();
@@ -162,6 +163,9 @@ private:
     ui::Logo stackedLogo;
     ui::Logo horizontalLogo;
     std::unique_ptr<Scene> scene;
+    // The scene switched away from this frame. Its sprites are still in the frame's batch and may
+    // use its textures, so it lives until the frame is recorded.
+    std::unique_ptr<Scene> endedScene;
     // The current scene, when it is the clock demo (HYOSHI_SCENE=clock), for its stress hook.
     ClockDemo* clockDemo = nullptr;
     std::vector<input::InputEvent> inputEvents;

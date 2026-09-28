@@ -2,13 +2,13 @@
 
 A mobile-first C++20 engine for rhythm games.
 
-Hyoshi is built on one premise: **the audio clock is the source of truth.** Song time comes from the audio device, input is timestamped by the OS, and judgment is integer-microsecond math, so results are deterministic and replays reproduce exactly. Rendering is Vulkan behind a small RHI, and every game style (Mania, Drum, Circle, Highway, Line) is meant to be a pluggable mode; Mania is the first.
+Hyoshi is built on one premise: **the audio clock is the source of truth.** Song time comes from the audio device, input is timestamped by the OS, and judgment is integer-microsecond math, so results are deterministic and replays reproduce exactly. Rendering is Vulkan behind a small RHI, and every game style (Mania, Drum, Circle, Highway, Line) is meant to be a pluggable mode; Mania and Circle are built.
 
 - **Targets:** Android (Vulkan) and macOS (Vulkan through MoltenVK). Windows x64 (MSVC) builds and runs as a development host.
 - **Later:** iOS (Metal), Windows as a shipping target, Linux.
 - **License:** MIT (see [LICENSE](LICENSE)). The fonts it installs, Noto Sans JP, are under the SIL Open Font License 1.1; other dependencies keep their own licenses ([docs/REFERENCES.md](docs/REFERENCES.md)).
 
-The first game on it is developed separately, in its own repository.
+The games on it are developed separately, in their own repositories.
 
 ## What's in it
 
@@ -22,12 +22,13 @@ The first game on it is developed separately, in its own repository.
 | `audio` | `IAudioBackend` on miniaudio (CoreAudio, AAudio, WASAPI), a mixer in the audio callback, decoding (WAV, MP3, FLAC, Ogg Vorbis), sample-exact scheduling on music frames |
 | `rhythm` | `SongClock` (song time anchored to the audio cursor, filtered, never rewinds), the chart format (`.rchart.json`), scroll maps, judgments, scoring, offset calibration |
 | `modes/mania` | Mania charts, the judge (with autoplay), and the playfield |
-| `songs` | Chart loading (`.rchart.json`, and osu!mania `.osu` converted in memory), a song library that scans song folders, and `SongPlayer`, which ties music to the song clock |
+| `modes/circle` | Circle (osu!standard) charts with slider paths and stacking, the judge (with autoplay), scoring, and the playfield |
+| `songs` | Chart loading (`.rchart.json`, and osu!mania and osu!standard `.osu` converted in memory), a song library that scans song folders with a mode's chart reader, and `SongPlayer`, which ties music to the song clock |
 | `ui` | An immediate-mode UI kit for game menus (buttons, toggles, sliders, choices, lists with scrolling; mouse, touch, and keyboard), and logos drawn as distance fields |
 | `app` | The application: the main loop, scenes and fades, the debug overlay (Dear ImGui, F1), development hooks, and the "Made with Hyoshi Engine" splash |
 | `debug` | Dear ImGui drawn through the RHI |
 | `editor` | The editor framework (desktop): a menu bar and dockable ImGui panels over the running game, which a game's editor adds to ([ADR 0002](docs/decisions/0002-editor-framework.md)) |
-| `tools/osu-import` | `hyoshi-osu-import`: osu!mania beatmaps to `.rchart.json` |
+| `tools/osu-import` | The osu!mania and osu!standard importers; `hyoshi-osu-import` converts osu!mania beatmaps to `.rchart.json` |
 | `tools/asset-cooker` | `hyoshi-asset-cooker`: app icons (window, Windows `.ico`, Android launcher and Play Store) from a logo |
 
 The design, milestones, and what was built where it differs from the plan are in [docs/DESIGN.md](docs/DESIGN.md). [docs/HANDOVER.md](docs/HANDOVER.md) has the current state, what is and isn't verified, invariants, and gotchas.
@@ -39,6 +40,7 @@ The design, milestones, and what was built where it differs from the plan are in
 - **M2 2D renderer:** sprites (10,000 at 120 Hz on an M5 Max), text, distance-field images, safe area. Still to come: texture atlases, MSDF text, ASTC.
 - **M3 Audio and the song clock:** done and stress-tested on macOS and Windows (device stalls, random seeks). Plays on the Android emulator.
 - **M4 First playable (Mania):** chart format, judge, replays, autoplay, osu!mania import, song library, UI kit. The first game is built on them.
+- **M8 Circle mode (started ahead of M5 to M7):** osu!standard import, slider paths, stacking, the judge with note lock, scoring, autoplay, and the playfield. Sliders are held but not yet followed, and spinners aren't judged ([DESIGN.md section 16.4](docs/DESIGN.md#164-as-built-circle-m8-started-ahead-of-drum)). A second game is built on it.
 
 ## Building
 
@@ -208,6 +210,7 @@ The manifest names the engine's activity, `com.britoshi.hyoshi.HyoshiActivity`, 
 |---|---|
 | `engine/` | The engine's modules (table above), each a CMake target `hyoshi::<module>`; `hyoshi::engine` is all of them |
 | `modes/mania/` | The Mania mode |
+| `modes/circle/` | The Circle mode |
 | `tools/` | `osu-import`, `asset-cooker` |
 | `samples/metronome/` | The sample app |
 | `shaders/` | Slang sources, compiled to SPIR-V 1.3 and embedded at build time |

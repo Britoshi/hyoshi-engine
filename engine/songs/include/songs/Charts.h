@@ -1,5 +1,6 @@
 #pragma once
 
+#include "circle/CircleChart.h"
 #include "core/Result.h"
 #include "core/Time.h"
 #include "mania/ManiaChart.h"
@@ -12,8 +13,8 @@
 namespace hyoshi::songs
 {
 
-// What to play: a chart file (.rchart.json, or an osu!mania .osu), or the built-in chart generated
-// to fit the metronome track.
+// What to play: a chart file (.rchart.json, or an osu!mania or osu!standard .osu), or the built-in
+// chart generated to fit the metronome track.
 struct ChartSource
 {
     std::string Path;
@@ -53,10 +54,24 @@ struct LoadedChart
 // Reads a .rchart.json, or converts an osu!mania .osu in memory.
 hyoshi::Result<LoadedChart> LoadChartFile(const std::string& path);
 
+struct LoadedCircleChart
+{
+    hyoshi::circle::CircleChart Chart;
+    // The chart's audio and background resolve against this directory (with a trailing
+    // separator, or empty).
+    std::string Directory;
+    std::vector<std::string> Warnings;
+};
+
+// Converts an osu!standard .osu in memory.
+hyoshi::Result<LoadedCircleChart> LoadCircleChartFile(const std::string& path);
+
 // The BPM that lasts longest in the chart, or 0 without timing.
 double GetMainBpm(const hyoshi::mania::ManiaChart& chart);
+double GetMainBpm(const hyoshi::circle::CircleChart& chart);
 
 // When the last note ends.
 hyoshi::SongTimeUs GetChartEnd(const hyoshi::mania::ManiaChart& chart);
+hyoshi::SongTimeUs GetChartEnd(const hyoshi::circle::CircleChart& chart);
 
 } // namespace hyoshi::songs

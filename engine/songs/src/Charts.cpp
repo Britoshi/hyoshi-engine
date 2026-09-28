@@ -1,6 +1,7 @@
 #include "songs/Charts.h"
 
 #include "osu/OsuManiaImporter.h"
+#include "osu/OsuStandardImporter.h"
 #include "platform/Platform.h"
 
 #include <algorithm>
@@ -39,6 +40,33 @@ bool EndsWith(std::string_view text, std::string_view suffix)
                           { return c >= 'A' && c <= 'Z' ? static_cast<char>(c + 32) : c; };
                           return lower(a) == lower(b);
                       });
+}
+
+// The BPM that lasts longest until the chart ends.
+double GetLongestBpm(const hyoshi::rhythm::Chart& info, SongTimeUs chartEnd)
+{
+    const std::vector<hyoshi::rhythm::TimingPoint>& timing = info.Timing;
+    if (timing.empty())
+    {
+        return 0.0;
+    }
+    const SongTimeUs end = std::max(chartEnd, timing.back().Time);
+    std::map<long long, SongTimeUs> durations;
+    for (size_t i = 0; i < timing.size(); ++i)
+    {
+        const SongTimeUs until = i + 1 < timing.size() ? timing[i + 1].Time : end;
+        durations[std::llround(timing[i].Bpm)] += std::max<SongTimeUs>(until - timing[i].Time, 0);
+    }
+    const auto longest = std::max_element(durations.begin(), durations.end(),
+                                          [](const auto& a, const auto& b) { return a.second < b.second; });
+    return static_cast<double>(longest->first);
+}
+
+// The folder a file is in, with a trailing separator, or empty.
+std::string GetDirectory(const std::string& path)
+{
+    const size_t slash = path.find_last_of("/\\");
+    return slash == std::string::npos ? "" : path.substr(0, slash + 1);
 }
 
 } // namespace
@@ -129,8 +157,7 @@ hyoshi::Result<LoadedChart> LoadChartFile(const std::string& path)
     const std::string_view text(reinterpret_cast<const char*>(bytes.Value().data()), bytes.Value().size());
 
     LoadedChart loaded;
-    const size_t slash = path.find_last_of("/\\");
-    loaded.Directory = slash == std::string::npos ? "" : path.substr(0, slash + 1);
+    loaded.Directory = GetDirectory(path);
     if (EndsWith(path, ".osu"))
     {
         hyoshi::Result<hyoshi::osu::OsuImportResult> imported = hyoshi::osu::ImportOsuMania(text);
@@ -152,23 +179,38 @@ hyoshi::Result<LoadedChart> LoadChartFile(const std::string& path)
     return loaded;
 }
 
+hyoshi::Result<LoadedCircleChart> LoadCircleChartFile(const std::string& path)
+{
+    if (!EndsWith(path, ".osu"))
+    {
+        return hyoshi::Error{"Not an .osu file"};
+    }
+    hyoshi::Result<std::vector<std::byte>> bytes = hyoshi::platform::LoadFile(path);
+    if (!bytes)
+    {
+        return bytes.GetError();
+    }
+    const std::string_view text(reinterpret_cast<const char*>(bytes.Value().data()), bytes.Value().size());
+    hyoshi::Result<hyoshi::osu::OsuStandardImportResult> imported = hyoshi::osu::ImportOsuStandard(text);
+    if (!imported)
+    {
+        return imported.GetError();
+    }
+    LoadedCircleChart loaded;
+    loaded.Chart = std::move(imported.Value().Chart);
+    loaded.Warnings = std::move(imported.Value().Warnings);
+    loaded.Directory = GetDirectory(path);
+    return loaded;
+}
+
 double GetMainBpm(const ManiaChart& chart)
 {
-    const std::vector<hyoshi::rhythm::TimingPoint>& timing = chart.Info.Timing;
-    if (timing.empty())
-    {
-        return 0.0;
-    }
-    const SongTimeUs end = std::max(GetChartEnd(chart), timing.back().Time);
-    std::map<long long, SongTimeUs> durations;
-    for (size_t i = 0; i < timing.size(); ++i)
-    {
-        const SongTimeUs until = i + 1 < timing.size() ? timing[i + 1].Time : end;
-        durations[std::llround(timing[i].Bpm)] += std::max<SongTimeUs>(until - timing[i].Time, 0);
-    }
-    const auto longest = std::max_element(durations.begin(), durations.end(),
-                                          [](const auto& a, const auto& b) { return a.second < b.second; });
-    return static_cast<double>(longest->first);
+    return GetLongestBpm(chart.Info, GetChartEnd(chart));
+}
+
+double GetMainBpm(const hyoshi::circle::CircleChart& chart)
+{
+    return GetLongestBpm(chart.Info, GetChartEnd(chart));
 }
 
 SongTimeUs GetChartEnd(const ManiaChart& chart)
@@ -179,6 +221,11 @@ SongTimeUs GetChartEnd(const ManiaChart& chart)
         end = std::max(end, note.EndTime);
     }
     return end;
+}
+
+SongTimeUs GetChartEnd(const hyoshi::circle::CircleChart& chart)
+{
+    return chart.GetEndTime();
 }
 
 } // namespace hyoshi::songs

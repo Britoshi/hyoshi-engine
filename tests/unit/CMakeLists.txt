@@ -3,6 +3,7 @@ add_executable(hyoshi_unit_tests
     AudioDecoderTests.cpp
     Camera2DTests.cpp
     ChartTests.cpp
+    CircleTests.cpp
     ConcurrencyTests.cpp
     HandleTests.cpp
     ImageTests.cpp
@@ -13,11 +14,12 @@ add_executable(hyoshi_unit_tests
     OsuImportTests.cpp
     ResultTests.cpp
     SongClockTests.cpp
+    SongLibraryTests.cpp
     TextTests.cpp
     UiTests.cpp
 )
 
-target_link_libraries(hyoshi_unit_tests PRIVATE hyoshi::core hyoshi::input hyoshi::renderer hyoshi::audio hyoshi::rhythm hyoshi::mania hyoshi::osu_import hyoshi::ui
+target_link_libraries(hyoshi_unit_tests PRIVATE hyoshi::core hyoshi::input hyoshi::renderer hyoshi::audio hyoshi::rhythm hyoshi::mania hyoshi::circle hyoshi::osu_import hyoshi::songs hyoshi::ui
     doctest::doctest hyoshi_stb)
 list(GET HYOSHI_FONT_FILES 0 testFont)
 target_compile_definitions(hyoshi_unit_tests PRIVATE HYOSHI_REPLAY_DIR="${PROJECT_SOURCE_DIR}/tests/replays"

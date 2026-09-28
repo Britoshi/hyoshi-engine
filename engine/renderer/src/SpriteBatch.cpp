@@ -104,6 +104,15 @@ void SpriteBatch::Begin(const Camera2D& camera)
 {
     clipTransform = camera.GetClipTransform();
     entries.clear();
+    orderedLayers.clear();
+}
+
+void SpriteBatch::KeepOrder(int32_t layer)
+{
+    if (std::find(orderedLayers.begin(), orderedLayers.end(), layer) == orderedLayers.end())
+    {
+        orderedLayers.push_back(layer);
+    }
 }
 
 void SpriteBatch::Draw(const Sprite& sprite)
@@ -111,6 +120,7 @@ void SpriteBatch::Draw(const Sprite& sprite)
     Entry entry;
     entry.Layer = sprite.Layer;
     entry.Texture = sprite.Texture.IsValid() ? sprite.Texture : whiteTexture;
+    entry.TextureKey = 0;
     entry.Data = {sprite.Center,          sprite.Size,
                   sprite.Rotation,        sprite.UvRect,
                   PackColor(sprite.Tint), sprite.IsDistanceField ? 1u : 0u};
@@ -136,6 +146,12 @@ void SpriteBatch::End(rhi::ICommandList& commands)
         return;
     }
 
+    for (Entry& entry : entries)
+    {
+        const bool isOrdered =
+            std::find(orderedLayers.begin(), orderedLayers.end(), entry.Layer) != orderedLayers.end();
+        entry.TextureKey = isOrdered ? 0 : SortKey(entry.Texture);
+    }
     std::stable_sort(entries.begin(), entries.end(),
                      [](const Entry& a, const Entry& b)
                      {
@@ -143,7 +159,7 @@ void SpriteBatch::End(rhi::ICommandList& commands)
                          {
                              return a.Layer < b.Layer;
                          }
-                         return SortKey(a.Texture) < SortKey(b.Texture);
+                         return a.TextureKey < b.TextureKey;
                      });
 
     instances.resize(entries.size());

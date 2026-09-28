@@ -6,7 +6,7 @@ add_library(hyoshi_songs STATIC
 add_library(hyoshi::songs ALIAS hyoshi_songs)
 
 target_include_directories(hyoshi_songs PUBLIC include)
-target_link_libraries(hyoshi_songs PUBLIC hyoshi::core hyoshi::audio hyoshi::rhythm hyoshi::mania
+target_link_libraries(hyoshi_songs PUBLIC hyoshi::core hyoshi::audio hyoshi::rhythm hyoshi::mania hyoshi::circle
     PRIVATE hyoshi::platform hyoshi::osu_import)
 
 hyoshi_set_warnings(hyoshi_songs)

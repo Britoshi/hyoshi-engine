@@ -46,36 +46,22 @@ struct Found
     bool IsOsu = false;
 };
 
-void AddChart(const fs::path& path, std::vector<Found>& found)
+void AddChart(const fs::path& path, ChartReader reader, std::vector<Found>& found)
 {
     const std::string pathText = path.string();
-    hyoshi::Result<LoadedChart> loaded = LoadChartFile(pathText);
-    if (!loaded)
+    std::optional<LibraryChart> chart = reader(pathText);
+    if (!chart)
     {
-        // Other osu! modes share the file extension; they're simply not Mania charts.
-        HYOSHI_LOG_DEBUG("Library: skipping {}: {}", pathText, loaded.GetError().Message);
         return;
     }
-    const hyoshi::mania::ManiaChart& chart = loaded.Value().Chart;
     Found entry;
-    entry.Chart.Source.Path = pathText;
-    entry.Chart.Metadata = chart.Info.Metadata;
-    entry.Chart.Key = GetChartKey(chart.Info.Metadata);
-    entry.Chart.LaneCount = chart.LaneCount;
-    entry.Chart.NoteCount = static_cast<uint32_t>(chart.Notes.size());
-    entry.Chart.LengthUs = GetChartEnd(chart);
-    entry.Chart.Bpm = GetMainBpm(chart);
-    entry.Chart.AudioPath = loaded.Value().Directory + chart.Info.AudioFile;
-    entry.Chart.PreviewUs =
-        chart.Info.Metadata.PreviewStartUs > 0
-            ? chart.Info.Metadata.PreviewStartUs
-            : static_cast<hyoshi::SongTimeUs>(static_cast<double>(entry.Chart.LengthUs) * DEFAULT_PREVIEW_FRACTION);
+    entry.Chart = std::move(*chart);
     entry.Folder = path.parent_path().string();
     entry.IsOsu = ToLower(pathText).ends_with(".osu");
     found.push_back(std::move(entry));
 }
 
-void ScanFolder(const fs::path& folder, std::vector<Found>& found)
+void ScanFolder(const fs::path& folder, ChartReader reader, std::vector<Found>& found)
 {
     std::error_code error;
     for (const fs::directory_entry& entry : fs::directory_iterator(folder, error))
@@ -83,9 +69,27 @@ void ScanFolder(const fs::path& folder, std::vector<Found>& found)
         std::error_code entryError;
         if (entry.is_regular_file(entryError) && IsChartFile(entry.path()))
         {
-            AddChart(entry.path(), found);
+            AddChart(entry.path(), reader, found);
         }
     }
+}
+
+// What every reader fills in the same way.
+LibraryChart MakeLibraryChart(const std::string& path, const hyoshi::rhythm::Chart& info, const std::string& directory,
+                              uint32_t noteCount, hyoshi::SongTimeUs lengthUs, double bpm)
+{
+    LibraryChart chart;
+    chart.Source.Path = path;
+    chart.Metadata = info.Metadata;
+    chart.Key = GetChartKey(info.Metadata);
+    chart.NoteCount = noteCount;
+    chart.LengthUs = lengthUs;
+    chart.Bpm = bpm;
+    chart.AudioPath = directory + info.AudioFile;
+    chart.PreviewUs = info.Metadata.PreviewStartUs > 0
+                          ? info.Metadata.PreviewStartUs
+                          : static_cast<hyoshi::SongTimeUs>(static_cast<double>(lengthUs) * DEFAULT_PREVIEW_FRACTION);
+    return chart;
 }
 
 LibrarySong MakeDemoSong()
@@ -113,7 +117,43 @@ LibrarySong MakeDemoSong()
 
 } // namespace
 
-std::vector<LibrarySong> ScanSongFolders(const std::vector<std::string>& folders)
+std::optional<LibraryChart> ReadManiaChart(const std::string& path)
+{
+    hyoshi::Result<LoadedChart> loaded = LoadChartFile(path);
+    if (!loaded)
+    {
+        // Other osu! modes share the file extension; they're simply not Mania charts.
+        HYOSHI_LOG_DEBUG("Library: skipping {}: {}", path, loaded.GetError().Message);
+        return std::nullopt;
+    }
+    const hyoshi::mania::ManiaChart& chart = loaded.Value().Chart;
+    LibraryChart entry =
+        MakeLibraryChart(path, chart.Info, loaded.Value().Directory, static_cast<uint32_t>(chart.Notes.size()),
+                         GetChartEnd(chart), GetMainBpm(chart));
+    entry.LaneCount = chart.LaneCount;
+    return entry;
+}
+
+std::optional<LibraryChart> ReadCircleChart(const std::string& path)
+{
+    hyoshi::Result<LoadedCircleChart> loaded = LoadCircleChartFile(path);
+    if (!loaded)
+    {
+        HYOSHI_LOG_DEBUG("Library: skipping {}: {}", path, loaded.GetError().Message);
+        return std::nullopt;
+    }
+    const hyoshi::circle::CircleChart& chart = loaded.Value().Chart;
+    LibraryChart entry =
+        MakeLibraryChart(path, chart.Info, loaded.Value().Directory, static_cast<uint32_t>(chart.Notes.size()),
+                         GetChartEnd(chart), GetMainBpm(chart));
+    if (!chart.BackgroundFile.empty())
+    {
+        entry.BackgroundPath = loaded.Value().Directory + chart.BackgroundFile;
+    }
+    return entry;
+}
+
+std::vector<LibrarySong> ScanSongFolders(const std::vector<std::string>& folders, const LibraryOptions& options)
 {
     std::vector<Found> found;
     for (const std::string& folderText : folders)
@@ -125,13 +165,13 @@ std::vector<LibrarySong> ScanSongFolders(const std::vector<std::string>& folders
             continue;
         }
         // Charts directly in the song folder, then one level of map folders.
-        ScanFolder(folder, found);
+        ScanFolder(folder, options.Reader, found);
         for (const fs::directory_entry& entry : fs::directory_iterator(folder, error))
         {
             std::error_code entryError;
             if (entry.is_directory(entryError))
             {
-                ScanFolder(entry.path(), found);
+                ScanFolder(entry.path(), options.Reader, found);
             }
         }
     }
@@ -191,10 +231,13 @@ std::vector<LibrarySong> ScanSongFolders(const std::vector<std::string>& folders
                   return artistA != artistB ? artistA < artistB : ToLower(a.Title) < ToLower(b.Title);
               });
 
-    LibrarySong demo = MakeDemoSong();
-    if (!demo.Charts.empty())
+    if (options.HasBuiltInChart)
     {
-        songs.push_back(std::move(demo));
+        LibrarySong demo = MakeDemoSong();
+        if (!demo.Charts.empty())
+        {
+            songs.push_back(std::move(demo));
+        }
     }
     return songs;
 }
@@ -253,7 +296,8 @@ bool UnpackBundledSongs(const std::string& assetFolder, const std::string& desti
     return true;
 }
 
-SongLibrary::SongLibrary(hyoshi::JobSystem& jobSystem) : jobs(jobSystem)
+SongLibrary::SongLibrary(hyoshi::JobSystem& jobSystem, LibraryOptions libraryOptions)
+    : jobs(jobSystem), options(libraryOptions)
 {
 }
 
@@ -264,7 +308,8 @@ void SongLibrary::SetFolders(std::vector<std::string> songFolders)
 
 void SongLibrary::Rescan()
 {
-    pendingScan = jobs.Submit([scanFolders = folders] { return ScanSongFolders(scanFolders); });
+    pendingScan = jobs.Submit([scanFolders = folders, scanOptions = options]
+                              { return ScanSongFolders(scanFolders, scanOptions); });
 }
 
 void SongLibrary::Update()
