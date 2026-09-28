@@ -450,6 +450,11 @@ bool Platform::IsQuitRequested() const
     return lifecycle->IsQuitRequested;
 }
 
+void Platform::RequestQuit()
+{
+    lifecycle->IsQuitRequested = true;
+}
+
 bool Platform::IsSuspended() const
 {
     return lifecycle->IsSuspended;

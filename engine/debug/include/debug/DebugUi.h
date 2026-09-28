@@ -17,12 +17,20 @@ class Platform;
 namespace hyoshi::debug
 {
 
+struct DebugUiConfig
+{
+    // Windows dock into each other and into a dock space (the editor, ADR 0002).
+    bool EnableDocking = false;
+    // The saved window layout, in the user data directory.
+    std::string IniFileName = "imgui.ini";
+};
+
 // Dear ImGui for debug overlays and tools, never player-facing UI (DESIGN.md section 17.3).
 // Input comes from ImGui's SDL3 backend; drawing goes through the RHI like everything else.
 class DebugUi
 {
 public:
-    Result<void> Initialize(rhi::IRenderDevice& device, platform::Platform& platform);
+    Result<void> Initialize(rhi::IRenderDevice& device, platform::Platform& platform, const DebugUiConfig& config = {});
     void Shutdown();
 
     // Starts an ImGui frame. Build windows with ImGui:: calls between this and Render.

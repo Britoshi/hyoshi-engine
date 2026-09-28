@@ -124,6 +124,9 @@ public:
 
     bool IsQuitRequested() const;
 
+    // Ends the main loop as closing the window does.
+    void RequestQuit();
+
     // True between entering the background and returning to the foreground.
     bool IsSuspended() const;
 

@@ -26,6 +26,7 @@ The first game on it is developed separately, in its own repository.
 | `ui` | An immediate-mode UI kit for game menus (buttons, toggles, sliders, choices, lists with scrolling; mouse, touch, and keyboard), and logos drawn as distance fields |
 | `app` | The application: the main loop, scenes and fades, the debug overlay (Dear ImGui, F1), development hooks, and the "Made with Hyoshi Engine" splash |
 | `debug` | Dear ImGui drawn through the RHI |
+| `editor` | The editor framework (desktop): a menu bar and dockable ImGui panels over the running game, which a game's editor adds to ([ADR 0002](docs/decisions/0002-editor-framework.md)) |
 | `tools/osu-import` | `hyoshi-osu-import`: osu!mania beatmaps to `.rchart.json` |
 | `tools/asset-cooker` | `hyoshi-asset-cooker`: app icons (window, Windows `.ico`, Android launcher and Play Store) from a logo |
 
@@ -138,6 +139,45 @@ int main(int, char*[])
 }
 ```
 
+**The game's editor.** A game can also build an editor: the game itself, run with a menu bar and dockable ImGui panels over it, to which the game adds its own panels ([ADR 0002](docs/decisions/0002-editor-framework.md)). The game's code goes in a library that both executables link, and `hyoshi_add_editor` (desktop only; nothing on Android) builds the editor like `hyoshi_add_app` plus the editor framework, which the game's own executable never links:
+
+```cmake
+add_library(my_game_code STATIC src/MyGame.cpp)
+target_link_libraries(my_game_code PUBLIC hyoshi::engine)
+hyoshi_add_app(my_game OUTPUT_NAME MyGame SOURCES src/Main.cpp)
+target_link_libraries(my_game PRIVATE my_game_code)
+hyoshi_add_editor(my_game_editor OUTPUT_NAME MyGameEditor SOURCES src/editor/EditorMain.cpp src/editor/MyEditor.cpp)
+if(TARGET my_game_editor)
+    target_link_libraries(my_game_editor PRIVATE my_game_code)
+endif()
+```
+
+```cpp
+class MyPanel : public hyoshi::editor::Panel
+{
+public:
+    MyPanel() : Panel("My panel") {}
+    void Build() override { ImGui::Text("..."); }    // the window's contents, every frame it's open
+};
+
+class MyEditor : public hyoshi::editor::Editor
+{
+public:
+    hyoshi::Result<void> Initialize(hyoshi::editor::EditorServices& services) override
+    {
+        services.AddPanel(std::make_unique<MyPanel>());   // after the game's Initialize
+        return {};
+    }
+};
+
+// EditorMain.cpp: the game's name, so the editor shares its settings; no splash.
+config.Name = "My Game";
+config.WindowTitle = "My Game Editor";
+int exitCode = hyoshi::editor::Run(config, game, editor);
+```
+
+Game code can check `AppServices::IsEditor` to skip what only suits players. The editor saves its panel layout in `editor-imgui.ini`, next to the game's settings.
+
 `hyoshi-asset-cooker icons <logo.png> <game folder>` writes a game's icons into that layout: `content/textures/app-icon.png`, `windows/app.ico`, and the Android launcher and Play Store icons.
 
 ### Android
@@ -173,6 +213,6 @@ The manifest names the engine's activity, `com.britoshi.hyoshi.HyoshiActivity`, 
 | `shaders/` | Slang sources, compiled to SPIR-V 1.3 and embedded at build time |
 | `content/textures/` | The engine's logos, for the splash |
 | `platforms/` | Per-platform glue: the Windows UTF-8 manifest, SDL's Android Java sources and the engine's activity, `hyoshi-app.gradle` |
-| `cmake/` | CPM, pinned dependencies, warnings, shaders, `hyoshi_add_app`, code checks |
+| `cmake/` | CPM, pinned dependencies, warnings, shaders, `hyoshi_add_app`, `hyoshi_add_editor`, code checks |
 | `tests/` | doctest unit tests and replay fixtures |
-| `docs/` | Design, references, handover |
+| `docs/` | Design, references, handover, architecture decision records (`decisions/`) |

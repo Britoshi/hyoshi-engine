@@ -107,7 +107,8 @@ const char* ToString(hyoshi::rhi::SurfaceTransform transform)
 
 } // namespace
 
-Application::Application(AppConfig appConfig, Game& appGame) : config(std::move(appConfig)), game(appGame)
+Application::Application(AppConfig appConfig, Game& appGame, EditorLayer* appEditorLayer)
+    : config(std::move(appConfig)), game(appGame), editorLayer(appEditorLayer)
 {
 }
 
@@ -284,8 +285,13 @@ int Application::Run()
         RunScene(now, frameSeconds);
         Update(frameSeconds);
 
-        // ImGui runs every frame so its input doesn't pile up; windows show only with F1.
+        // ImGui runs every frame so its input doesn't pile up; windows show only with F1, or always
+        // in the editor.
         debugUi.BeginFrame();
+        if (editorLayer != nullptr && services)
+        {
+            editorLayer->Build();
+        }
         if (isDebugVisible)
         {
             BuildStatsWindow();
@@ -330,7 +336,7 @@ hyoshi::Result<void> Application::Initialize()
 
     platform::PlatformConfig platformConfig;
     platformConfig.AppName = config.Name;
-    platformConfig.WindowTitle = config.Name;
+    platformConfig.WindowTitle = config.WindowTitle.empty() ? config.Name : config.WindowTitle;
     platformConfig.EnableVulkan = true;
     // HYOSHI_WINDOW_SIZE=720x1280 opens a portrait window, to check layouts on the desktop.
     if (const char* size = std::getenv("HYOSHI_WINDOW_SIZE"))
@@ -369,7 +375,14 @@ hyoshi::Result<void> Application::Initialize()
     {
         return result;
     }
-    if (hyoshi::Result<void> result = debugUi.Initialize(*device, platform); !result)
+    // The editor's panels dock, and its layout is kept apart from the debug overlay's.
+    hyoshi::debug::DebugUiConfig debugUiConfig;
+    if (editorLayer != nullptr)
+    {
+        debugUiConfig.EnableDocking = true;
+        debugUiConfig.IniFileName = "editor-imgui.ini";
+    }
+    if (hyoshi::Result<void> result = debugUi.Initialize(*device, platform, debugUiConfig); !result)
     {
         return result;
     }
@@ -395,10 +408,17 @@ hyoshi::Result<void> Application::Initialize()
     audioConfig.HostClock = &hyoshi::platform::ReadHostClock;
     if (Result<void> result = audio->Initialize(audioConfig); result)
     {
-        services = std::make_unique<AppServices>(AppServices{platform, *device, *audio, jobs});
+        services = std::make_unique<AppServices>(AppServices{platform, *device, *audio, jobs, editorLayer != nullptr});
         if (Result<void> gameResult = game.Initialize(*services); !gameResult)
         {
             return gameResult;
+        }
+        if (editorLayer != nullptr)
+        {
+            if (Result<void> editorResult = editorLayer->Initialize(*services); !editorResult)
+            {
+                return editorResult;
+            }
         }
         StartFirstScene();
     }
@@ -520,8 +540,10 @@ void Application::StartFirstScene()
 void Application::RunScene(HostTimeNs now, float deltaSeconds)
 {
     const glm::vec2 canvas = camera.GetVirtualSize();
-    const bool isKeyboardCaptured = isDebugVisible && debugUi.WantsKeyboard();
-    const bool isPointerCaptured = isDebugVisible && debugUi.WantsPointer();
+    // The editor's windows are always there; the debug overlay's only while it shows.
+    const bool hasImGuiWindows = isDebugVisible || editorLayer != nullptr;
+    const bool isKeyboardCaptured = hasImGuiWindows && debugUi.WantsKeyboard();
+    const bool isPointerCaptured = hasImGuiWindows && debugUi.WantsPointer();
     const hyoshi::platform::NormalizedRect safe = platform.GetSafeArea();
     ui->SetSafeArea({safe.X, safe.Y}, {safe.X + safe.Width, safe.Y + safe.Height});
     ui->BeginFrame(inputEvents, canvas, deltaSeconds, spriteBatch, isPointerCaptured, isKeyboardCaptured);
@@ -577,6 +599,10 @@ void Application::Shutdown()
     clockDemo = nullptr;
     if (services)
     {
+        if (editorLayer != nullptr)
+        {
+            editorLayer->Shutdown();
+        }
         game.Shutdown();
         services.reset();
     }

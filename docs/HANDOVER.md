@@ -2,7 +2,7 @@
 
 For whoever works on Hyoshi Engine next, human or AI. Read this first, then [README.md](../README.md) (modules, build, making a game, development hooks) and [DESIGN.md](DESIGN.md) (the plan, with "As built" notes where the code differs). Update this file at the end of every working session.
 
-Last updated: 2026-09-28, the repository's first commit. Before that, the engine and its first game shared one private repository; on 2026-09-28 they were split. The engine starts here with fresh history. The game keeps the old history in its own repository and uses this one as a git submodule.
+Last updated: 2026-09-28, the editor framework's milestone 0 ([ADR 0002](decisions/0002-editor-framework.md)) and the first macOS build since mid M4. Before that, 2026-09-28, the repository's first commit. Before that, the engine and its first game shared one private repository; on 2026-09-28 they were split. The engine starts here with fresh history. The game keeps the old history in its own repository and uses this one as a git submodule.
 
 ## Where things stand
 
@@ -16,7 +16,9 @@ Hyoshi Engine is a mobile-first C++20 rhythm game engine (Vulkan through an RHI,
 | M3 Audio and song clock | Done, stress-tested | Done, stress-tested | AAudio plays on the emulator; not stress-tested |
 | M4 First playable (Mania) | The parts are here; the first game is built on them | Same | The first game plays on the emulator |
 
-**Not built on macOS since the Windows work began** (mid M4): the Windows changes, the text renderer, the UI kit, images, the app framework, and the split. Build and run the checks there first; watch for libc++ missing `std::format`, and for anything MSVC accepted that Clang won't.
+**macOS, 2026-09-28: builds again, but validation isn't clean.** The engine builds on its own and as a game's subdirectory with Apple Clang, and the unit tests, `format-check`, and `tidy` pass. But every app now exits with a failure code: the validation layer reports 4 portability errors at startup, `vkCreateImageView(): swizzle is disabled for this device`, from the one-channel texture views in `engine/rhi/vulkan/VulkanResources.cpp:165` (swizzled to 1, 1, 1, R), which MoltenVK's portability subset doesn't allow by default. The engine at its first commit (`98937f9`) does the same, so the editor didn't cause it; when it began isn't known (the Mac hadn't built since mid M4). Not fixed yet. Two ways to fix it: turn on the portability subset's `imageViewFormatSwizzle` feature if MoltenVK offers it, or read the red channel in the shaders and drop the swizzle. The other checks (clock stress, surface stress) haven't been run on the Mac since mid M4.
+
+**The editor framework** (`engine/editor`, ADR 0002) is at milestone 0: a game's editor runs the game full-window with a menu bar and dockable ImGui panels over it. The first game's editor, with one panel, opens on the Mac (screenshot). Next is milestone 1: the chart and timeline panel, and playing from a point in a chart.
 
 ### Verified
 
@@ -29,6 +31,7 @@ By script (the development hooks, screenshots), by unit tests (67 cases), and th
 - The UI kit, headless, with synthetic input: clicks, touch, lists, toggles, sliders, key repeats, wheel, drag, scroll limits. Text renders in Latin and Japanese.
 - Logo distance fields: unit tests for edges, trimming, faint noise, and specks. The splash renders in landscape and portrait.
 - The sample (`samples/metronome`) builds and runs; the engine builds on its own (`cmake --preset windows-debug`) and as a game's subdirectory.
+- **macOS, 2026-09-28:** the engine builds on its own (with the sample) and as the game's subdirectory; 67 unit tests, `format-check`, and `tidy` pass. The game's autoplay scores 1,000,000 on the built-in drill. The game's editor opens with its menu bar and panel over the song select (screenshot), keeps it up through an autoplay run to the results, and shuts down cleanly. Validation isn't clean (above).
 - **Android emulator** (API 36, x86_64, Vulkan 1.3 through gfxstream, AAudio at 48 kHz): the game's APK builds for arm64-v8a and x86_64 through `platforms/android/hyoshi-app.gradle`; rendering, rotation, the safe area, immersive fullscreen, the back button (as Escape), and touch with OS timestamps (0.4 to 17 ms before the frame's pump, so SDL passes the event time through: the DESIGN.md section 12.3 question, answered for the emulator). Debug APKs bundle a game's `content/charts` and unpack it on first launch.
 
 ### Not verified
@@ -36,7 +39,9 @@ By script (the development hooks, screenshots), by unit tests (67 cases), and th
 - **A real Android phone**: arm64 at all, real touch, cutouts, performance, AAudio's real latency, background/foreground cycles.
 - **Audio sync by ear**: the M3 listening test hasn't been done.
 - **FLAC and Ogg Vorbis decoding.** WAV and MP3 are exercised.
-- **macOS since mid M4** (above).
+- **macOS**: validation (above), and the stress checks since mid M4.
+- **The editor framework on Windows and Android.** Not built there after the change (2026-09-28): the `EditorLayer` changes to `Application`, the ImGui docking branch, and `hyoshi_add_editor` with MSVC; on Android, that `engine/editor` and `hyoshi_add_editor` stay out of the build, and that the docking branch still builds for the game. Build both before relying on them.
+- **The editor by hand**: docking, the View menu, File > Quit, and typing into a panel while a game runs (the ImGui windows should take the keys). Which panels are open isn't saved between runs; where they are is.
 
 ## Map of the code
 
@@ -47,24 +52,28 @@ By script (the development hooks, screenshots), by unit tests (67 cases), and th
 | `engine/input` | `InputEvent`, `InputQueue` (sorted by host time) |
 | `engine/rhi` | `IRenderDevice` and the Vulkan backend (volk, VMA, MoltenVK on macOS) |
 | `engine/renderer` | `Camera2D` (short side 1080), `SpriteBatch` (sprites can be distance fields; `WithAlpha`), `TextRenderer` (runtime SDF glyphs from TTF/OTF, atlas pages), `Image` (PNG/JPEG, distance fields from alpha, textures) |
-| `engine/debug` | Dear ImGui overlay (positions saved in `imgui.ini` in the user data directory) |
+| `engine/debug` | Dear ImGui overlay (positions saved in `imgui.ini` in the user data directory; the editor's in `editor-imgui.ini`, with docking on) |
 | `engine/audio` | `IAudioBackend`, `Mixer` (runs in the callback), miniaudio backend and decoder, `Synth` (clicks, metronome track) |
 | `engine/rhythm` | `SongClock`, chart format (`ChartFile`), `ScrollMap`, `Judgment`, `ScoreSystem`, `OffsetCalibration` |
 | `engine/songs` | `Charts` (`ChartSource`, `GetChartKey`, the built-in drill, loading `.osu` / `.rchart.json`), `SongLibrary` (scans song folders on a worker; `UnpackBundledSongs`), `SongPlayer` (music and the song clock) |
 | `engine/ui` | `Ui` (immediate-mode widgets, layout rectangles, colors, layers), `Logo` (images as distance fields, drawn to fit) |
-| `engine/app` | `Application` (main loop, scene switching with a fade, lifecycle, development hooks, exit checks), `Game` (the interface a game implements), `Scene`, `ClockDemo` (`HYOSHI_SCENE=clock`), the splash |
+| `engine/app` | `Application` (main loop, scene switching with a fade, lifecycle, development hooks, exit checks), `Game` (the interface a game implements), `EditorLayer` (the editor's hook into the main loop), `Scene`, `ClockDemo` (`HYOSHI_SCENE=clock`), the splash |
+| `engine/editor` | Desktop only. `Editor` (the interface a game's editor implements), `Panel`, `EditorServices`, `Run`; the menu bar and dock space (ADR 0002) |
 | `modes/mania` | `ManiaChart`, `ManiaJudge` (+ autoplay), `ManiaPlayfield` (drawing) |
 | `tools/osu-import` | `.osu` to `.rchart.json` converter (library + CLI) |
 | `tools/asset-cooker` | `hyoshi-asset-cooker icons`: a game's icons from its logo |
 | `samples/metronome` | The smallest game: splash, then the clock demo |
 | `platforms/windows` | The UTF-8 code page manifest every executable embeds |
 | `platforms/android` | SDL's Java glue (`org/libsdl/app`, from SDL 3.4.16), `HyoshiActivity`, `hyoshi-app.gradle` (a game's Android build) |
-| `cmake/` | CPM and pinned dependencies, warnings, shaders, `hyoshi_add_app` (HyoshiApp.cmake), `hyoshi_add_code_checks` (Tooling.cmake) |
+| `cmake/` | CPM and pinned dependencies (ImGui is the docking branch), warnings, shaders, `hyoshi_add_app` and `hyoshi_add_editor` (HyoshiApp.cmake), `hyoshi_add_code_checks` (Tooling.cmake) |
+| `docs/decisions` | Architecture decision records: 0002, the editor framework (0001, the stack choices, isn't written yet) |
 | `tests/unit`, `tests/replays` | doctest unit tests; replay fixtures |
 
 ### How a game plugs in
 
 A game implements `hyoshi::app::Game` and passes it to `hyoshi::app::Application` with an `AppConfig` (name, window icon, whether to show the splash). `Application::Run` brings up the window, device, and audio, then calls `Game::Initialize` with the `AppServices` (platform, device, audio, jobs), shows the splash, and asks `Game::CreateFirstScene`. Each frame it calls `Game::Update`, then the scene's `RunFrame`; a scene moves on with `SwitchTo(nextScene)`, and the switch happens after the frame, with a fade. On backgrounding and at exit it calls `Game::Save`. The engine's assets install under `engine/` in the app's assets (`hyoshi_add_app`), a game's under their own folder names.
+
+A game's editor (ADR 0002) is a second executable from the same game code, built with `hyoshi_add_editor`, whose `main` calls `editor::Run(config, game, editor)`. `Run` gives the `Application` an `EditorLayer` (and no splash). With one, the `Application` keeps ImGui on with docking and `editor-imgui.ini`, lets the ImGui windows capture keys and the pointer while they want them, sets `AppServices::IsEditor`, calls the layer's `Initialize` after `Game::Initialize` (so the game's services exist), its `Build` every frame before the debug overlay's windows, and its `Shutdown` before `Game::Shutdown`. The layer draws the menu bar (File, View), a dock space over the window whose empty center passes input through to the game, and the game's panels. `AppConfig::WindowTitle` lets the editor's title differ while it shares the game's user data folder (`Name`).
 
 ### How time flows
 
@@ -152,10 +161,11 @@ Posting key messages (`WM_KEYDOWN`/`WM_KEYUP`) to the window drives an app witho
 
 ## Next steps, roughly in order
 
-1. Build and check on macOS (not done since mid M4).
+1. macOS: fix the validation errors (above), then run the stress checks there.
 2. A real Android phone: M1–M4 on the device (touch, cutouts, 20 background/foreground cycles, rotation), AAudio timestamps for the true output latency, and bundling the validation layer in debug builds.
 3. The clock after a device restart (above). It changes `SongClock`, so it affects every platform.
 4. GPU note positioning (DESIGN.md section 10.5). Notes are placed on the CPU now.
 5. Offsets per output route (DESIGN.md section 11.5), and a calibration scene (M5).
 6. CI (GitHub Actions) running the unit tests and replay fixtures on macOS and Windows, Tracy, ADR 0001.
 7. Windows, when it matters for play: precise key timestamps.
+8. The editor framework's milestone 1 (ADR 0002): the chart and timeline panel (DESIGN.md section 19.4), undo, file dialogs, and a play-mode hook so the game's gameplay starts from a point in the chart. Then milestone 2: RHI render targets and a camera per viewport, so the game draws inside a panel.

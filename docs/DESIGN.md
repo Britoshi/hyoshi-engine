@@ -1147,6 +1147,8 @@ Built on ImGui first:
 - Timeline track editing with easing previews
 - Instant test play from any point
 
+As built (editor framework, 2026-09-28): the chart editor will be a panel in an editor framework, [ADR 0002](decisions/0002-editor-framework.md). `engine/editor` (`hyoshi::editor`, desktop only) runs a game under its editor: the game full-window, with a menu bar and dockable ImGui panels over it (the docking branch of ImGui), and the dock space's empty center passes input to the game. A game implements `editor::Editor` and adds its own `editor::Panel`s, and `hyoshi_add_editor` builds the editor from the game's code as a library; the game's own executable never links the framework. `app::Application` takes the framework's side as an optional `app::EditorLayer`, and tells the game through `AppServices::IsEditor`. The ADR's milestones: the chart and timeline panel with play from a point in the chart next, then the game drawn in a panel (RHI render targets), then field descriptions, inspectors, and the object model of section 17.1.
+
 ---
 
 ## 20. Mobile Requirements Checklist

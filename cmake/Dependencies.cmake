@@ -92,10 +92,12 @@ CPMAddPackage(
 
 # Dear ImGui has no CMake project; build the core plus the SDL3 platform backend. Rendering goes
 # through the RHI (engine/debug), not imgui_impl_vulkan, so ImGui never touches Vulkan directly.
+# The docking branch, for the editor's panels (ADR 0002). Multiple viewports stay off: the RHI draws
+# only the main window.
 CPMAddPackage(
     NAME imgui
     GITHUB_REPOSITORY ocornut/imgui
-    GIT_TAG v1.92.9b
+    GIT_TAG v1.92.9b-docking
     DOWNLOAD_ONLY YES
 )
 add_library(hyoshi_imgui STATIC

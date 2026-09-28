@@ -39,7 +39,8 @@ void ResetRenderStateCallback(const ImDrawList*, const ImDrawCmd*)
 
 } // namespace
 
-Result<void> DebugUi::Initialize(rhi::IRenderDevice& renderDevice, platform::Platform& targetPlatform)
+Result<void> DebugUi::Initialize(rhi::IRenderDevice& renderDevice, platform::Platform& targetPlatform,
+                                 const DebugUiConfig& config)
 {
     device = &renderDevice;
     platform = &targetPlatform;
@@ -50,9 +51,13 @@ Result<void> DebugUi::Initialize(rhi::IRenderDevice& renderDevice, platform::Pla
     ImGuiIO& io = ImGui::GetIO();
     io.BackendRendererName = "hyoshi_rhi";
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures;
+    if (config.EnableDocking)
+    {
+        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    }
 
     // Window layout persists in the user data directory rather than the working directory.
-    iniPath = platform->GetUserDataPath().empty() ? std::string() : platform->GetUserDataPath() + "imgui.ini";
+    iniPath = platform->GetUserDataPath().empty() ? std::string() : platform->GetUserDataPath() + config.IniFileName;
     io.IniFilename = iniPath.empty() ? nullptr : iniPath.c_str();
 
     ImGui::StyleColorsDark();

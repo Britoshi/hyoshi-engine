@@ -9,6 +9,10 @@ add_subdirectory(rhythm)
 add_subdirectory(ui)
 add_subdirectory(songs)
 add_subdirectory(app)
+# Desktop only, like the editors built on it.
+if(NOT ANDROID)
+    add_subdirectory(editor)
+endif()
 
 # Everything the engine provides, for games: link this and write a hyoshi::app::Game.
 add_library(hyoshi_engine INTERFACE)

@@ -49,3 +49,15 @@ function(hyoshi_add_app target)
     endforeach()
     add_custom_command(TARGET ${target} POST_BUILD ${commands} VERBATIM)
 endfunction()
+
+# hyoshi_add_editor(<target> [OUTPUT_NAME <name>] SOURCES <file>... [ASSETS <folder>...] [WINDOWS_RC <file>])
+# A game's editor (ADR 0002): an app like hyoshi_add_app's that also links the editor framework.
+# Its sources hold a main that calls hyoshi::editor::Run, and the game's editor::Editor. Desktop
+# only: on Android this does nothing.
+function(hyoshi_add_editor target)
+    if(ANDROID)
+        return()
+    endif()
+    hyoshi_add_app(${target} ${ARGN})
+    target_link_libraries(${target} PRIVATE hyoshi::editor)
+endfunction()
