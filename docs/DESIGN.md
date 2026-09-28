@@ -735,6 +735,8 @@ As built (M4): `InputQueue` (`engine/input`) collects the frame's events, and `T
 
 As built (M4 menus): `Wheel` events carry mouse wheel and trackpad scrolling. Key repeats reach the queue marked `IsRepeat`: menus use them to scroll a held arrow key, and gameplay ignores them.
 
+As built (M8): Mac trackpads report each finger's position on the pad, and `TrackpadDown`, `TrackpadMove`, and `TrackpadUp` carry them (X and Y across the pad, not the window), so a game can aim with the pad as a tablet's pen aims: the pad maps onto the window. The OS moves the pointer from the same fingers, and menus ignore these events. `Platform::SetPointerLocked` hides the pointer and keeps it in the window while such a game plays, since AppKit sends the touches to the view under the pointer.
+
 ### 12.3 Timestamp accuracy (verify early)
 
 SDL3 event timestamps are in nanoseconds, but **M1 must verify** that on Android they originate from the OS event time (`MotionEvent` event time) rather than the moment SDL processed the event. If they do not, add a thin native hook that captures `MotionEvent.getEventTime()` and historical samples. The same check applies to iOS (`UITouch.timestamp`) later.

@@ -138,6 +138,11 @@ public:
     // Sets the window's logical size (desktop only; mobile windows are fullscreen).
     void SetWindowSize(int32_t width, int32_t height);
 
+    // Hides the pointer and keeps it in the window while the window has focus, for aiming with
+    // something else (a trackpad's positions on the pad). Pointer events still arrive, but their
+    // positions stop moving. Desktop only; unlocking shows the pointer again.
+    void SetPointerLocked(bool isLocked);
+
     // Writable per-user directory for settings and caches, ending in a path separator.
     const std::string& GetUserDataPath() const;
 

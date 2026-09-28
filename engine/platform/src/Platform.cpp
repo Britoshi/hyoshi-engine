@@ -175,6 +175,9 @@ Result<void> Platform::Initialize(const PlatformConfig& config)
 
     // Android's back button arrives as a key (Escape, below) instead of closing the activity.
     SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
+    // Mac trackpad fingers arrive as touches on an indirect device, with where they touch the pad
+    // (Trackpad events, below). Without this SDL drops them. The pointer moves as before.
+    SDL_SetHint(SDL_HINT_TRACKPAD_IS_TOUCH_ONLY, "1");
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
         return Error{std::string("SDL_Init failed: ") + SDL_GetError()};
@@ -246,6 +249,7 @@ void Platform::Shutdown()
         return;
     }
 
+    SetPointerLocked(false);
     SDL_DestroyWindow(window);
     window = nullptr;
     if (isVulkanLoaded)
@@ -351,16 +355,28 @@ void Platform::PumpEvents()
         case SDL_EVENT_FINGER_UP:
         case SDL_EVENT_FINGER_CANCELED:
         {
-            // Mac trackpads report fingers too, as indirect devices. Only touchscreens are touch
-            // input; a trackpad already moves the pointer.
-            if (SDL_GetTouchDeviceType(event.tfinger.touchID) != SDL_TOUCH_DEVICE_DIRECT)
+            // Touchscreens are touch input. Mac trackpads report their fingers as an indirect
+            // device with absolute positions on the pad: those are Trackpad events, since the
+            // pointer already moves with them. Other devices are skipped.
+            const SDL_TouchDeviceType deviceType = SDL_GetTouchDeviceType(event.tfinger.touchID);
+            const bool isTrackpad = deviceType == SDL_TOUCH_DEVICE_INDIRECT_ABSOLUTE;
+            if (deviceType != SDL_TOUCH_DEVICE_DIRECT && !isTrackpad)
             {
                 break;
             }
             input::InputEvent inputEvent;
-            inputEvent.Type = event.type == SDL_EVENT_FINGER_DOWN     ? input::InputEventType::TouchDown
-                              : event.type == SDL_EVENT_FINGER_MOTION ? input::InputEventType::TouchMove
-                                                                      : input::InputEventType::TouchUp;
+            if (event.type == SDL_EVENT_FINGER_DOWN)
+            {
+                inputEvent.Type = isTrackpad ? input::InputEventType::TrackpadDown : input::InputEventType::TouchDown;
+            }
+            else if (event.type == SDL_EVENT_FINGER_MOTION)
+            {
+                inputEvent.Type = isTrackpad ? input::InputEventType::TrackpadMove : input::InputEventType::TouchMove;
+            }
+            else
+            {
+                inputEvent.Type = isTrackpad ? input::InputEventType::TrackpadUp : input::InputEventType::TouchUp;
+            }
             inputEvent.HostTime = static_cast<HostTimeNs>(event.common.timestamp);
             inputEvent.DeviceId = static_cast<uint32_t>(event.tfinger.touchID);
             inputEvent.FingerId = event.tfinger.fingerID;
@@ -370,10 +386,10 @@ void Platform::PumpEvents()
             inputQueue.Push(inputEvent);
             if (event.type != SDL_EVENT_FINGER_MOTION)
             {
-                HYOSHI_LOG_TRACE("Finger {} {} at ({:.3f}, {:.3f}), {:.3f} ms (+{:.3f} ms to pump)",
-                                 event.tfinger.fingerID,
-                                 inputEvent.Type == input::InputEventType::TouchDown ? "down" : "up", event.tfinger.x,
-                                 event.tfinger.y, TimestampMs(event), PumpDelayMs(event));
+                HYOSHI_LOG_TRACE("{} {} {} at ({:.3f}, {:.3f}), {:.3f} ms (+{:.3f} ms to pump)",
+                                 isTrackpad ? "Trackpad finger" : "Finger", event.tfinger.fingerID,
+                                 event.type == SDL_EVENT_FINGER_DOWN ? "down" : "up", event.tfinger.x, event.tfinger.y,
+                                 TimestampMs(event), PumpDelayMs(event));
             }
             break;
         }
@@ -526,6 +542,22 @@ void Platform::SetWindowSize(int32_t width, int32_t height)
     {
         SDL_SetWindowSize(window, width, height);
         SDL_SyncWindow(window);
+    }
+}
+
+void Platform::SetPointerLocked(bool isLocked)
+{
+    if (window == nullptr || SDL_GetWindowRelativeMouseMode(window) == isLocked)
+    {
+        return;
+    }
+    if (SDL_SetWindowRelativeMouseMode(window, isLocked))
+    {
+        HYOSHI_LOG_DEBUG("Pointer {}", isLocked ? "locked" : "unlocked");
+    }
+    else
+    {
+        HYOSHI_LOG_WARN("Couldn't {} the pointer: {}", isLocked ? "lock" : "unlock", SDL_GetError());
     }
 }
 

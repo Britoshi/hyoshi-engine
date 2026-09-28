@@ -22,7 +22,13 @@ enum class InputEventType : uint8_t
     AxisChange,
     // A mouse wheel or trackpad scroll: Value is vertical steps (positive away from the user),
     // X horizontal.
-    Wheel
+    Wheel,
+    // A finger on a trackpad that reports where it touches (Mac trackpads). X and Y are normalized
+    // 0..1 across the pad's surface from its top left, not the window. The OS still moves the
+    // pointer from the same fingers, so most scenes ignore these.
+    TrackpadDown,
+    TrackpadMove,
+    TrackpadUp
 };
 
 struct InputEvent
@@ -31,11 +37,11 @@ struct InputEvent
     // When the OS saw the event, on the same clock as the audio snapshots.
     HostTimeNs HostTime = 0;
     uint32_t DeviceId = 0;
-    // Touch only.
+    // Touch and trackpad only.
     uint64_t FingerId = 0;
     // Key: a KeyCode. Pointer: the button (1 left, 2 middle, 3 right). Axis: the axis ID.
     uint32_t Code = 0;
-    // Normalized 0..1 across the window (touch, pointer).
+    // Normalized 0..1 across the window (touch, pointer), or across the pad (trackpad).
     float X = 0.0f;
     float Y = 0.0f;
     // Axis value, or touch pressure.

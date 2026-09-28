@@ -137,6 +137,19 @@ TEST_CASE("Touch: the first finger is the pointer, and nothing stays hovered aft
     CHECK_FALSE(ui.IsHovered(BUTTON));
 }
 
+TEST_CASE("Trackpad fingers are positions on the pad, not the window: menus ignore them")
+{
+    UiFixture fixture;
+    hyoshi::ui::Ui& ui = fixture.Gui;
+
+    fixture.Frame({Pointer(InputEventType::PointerMove, OUTSIDE)});
+    fixture.Frame({Touch(InputEventType::TrackpadDown, INSIDE, 7), Touch(InputEventType::TrackpadMove, INSIDE, 7),
+                   Touch(InputEventType::TrackpadUp, INSIDE, 7)});
+    CHECK_FALSE(ui.IsTouch());
+    CHECK_FALSE(ui.IsHovered(BUTTON));
+    CHECK_FALSE(ui.Button(BUTTON, "Play"));
+}
+
 TEST_CASE("A clickable area keeps its identity while it moves")
 {
     UiFixture fixture;
