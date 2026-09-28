@@ -1,0 +1,22 @@
+# Hyoshi text replay, version 1: a regression fixture (DESIGN.md section 23).
+# Expected values were worked out by hand from the Mania rules in ManiaJudge.h:
+#   note 0 +10 ms Perfect, note 1 -30 ms Great, note 2 press +50 ms Good and held through its end
+#   (Perfect release), note 3 never pressed (Miss), note 4 +100 ms Bad, note 5 press on time
+#   (Perfect) and released 100 ms early (Bad), note 6 pressed 200 ms late (ignored, Miss).
+#   Points 1300 of 2700 -> score 481481; combo 3 before the first miss.
+chart mania-basic.rchart.json
+expect score 481481 maxcombo 3 perfect 3 great 1 good 1 bad 2 miss 2
+# song time (us), action, lane
+1010000 press 0
+1060000 release 0
+1470000 press 1
+1520000 release 1
+2050000 press 2
+3100000 release 2
+3600000 press 0
+3650000 release 0
+4000000 press 1
+4400000 release 1
+5200000 press 2
+5250000 release 2
+end 6000000

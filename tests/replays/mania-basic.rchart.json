@@ -1,0 +1,32 @@
+{
+  "formatVersion": 1,
+  "mode": "mania",
+  "metadata": {
+    "title": "Replay fixture: basic",
+    "artist": "Hyoshi tests",
+    "charter": "Hyoshi tests",
+    "difficultyName": "Fixture",
+    "difficultyValue": 1.0,
+    "previewStartUs": 0
+  },
+  "audio": {
+    "file": "none.ogg",
+    "offsetUs": 0
+  },
+  "timing": [
+    {"timeUs": 0, "bpm": 120.0, "meter": [4, 4]}
+  ],
+  "scrollVelocity": [],
+  "modeSettings": {
+    "laneCount": 4
+  },
+  "notes": [
+    {"timeUs": 1000000, "lane": 0},
+    {"timeUs": 1500000, "lane": 1},
+    {"timeUs": 2000000, "endTimeUs": 3000000, "lane": 2},
+    {"timeUs": 2500000, "lane": 3},
+    {"timeUs": 3500000, "lane": 0},
+    {"timeUs": 4000000, "endTimeUs": 4500000, "lane": 1},
+    {"timeUs": 5000000, "lane": 2}
+  ]
+}

@@ -1,0 +1,138 @@
+// The Android side of a game on Hyoshi Engine. A game's app/build.gradle sets its identity (namespace,
+// applicationId, versions, CMake target) and applies this after its `android` block:
+//
+//     ext.hyoshiEngineDir = file('../../hyoshi-engine')    // the engine checkout
+//     ext.hyoshiGameDir = file('../..')                     // the game's root, with CMakeLists.txt
+//     apply from: "${hyoshiEngineDir}/platforms/android/hyoshi-app.gradle"
+//
+// It builds the game's CMake project for phones (arm64-v8a) and the emulator (x86_64) with the
+// pinned NDK and CMake, adds SDL's Java glue and the engine's activity, packs the files the native
+// build installs (the engine's fonts and logos, the game's assets) as APK assets, and in debug
+// builds bundles the game's local maps (content/charts). The pinned versions are in the engine's
+// docs/REFERENCES.md.
+
+def engineDir = ext.hyoshiEngineDir
+def gameDir = ext.hyoshiGameDir
+
+// The files the native build installs (cmake/HyoshiApp.cmake), packed as the APK's assets.
+def nativeAssets = layout.buildDirectory.dir('generated/hyoshi-assets').get().asFile
+// CPM keeps downloaded dependencies here, shared with the desktop builds.
+def cpmCache = new File(System.getProperty('user.home'), '.cache/CPM')
+
+android {
+    compileSdk = 36
+    // The latest LTS NDK (DESIGN.md section 22.2).
+    ndkVersion = '27.3.13750724'
+
+    defaultConfig {
+        // AAudio and Vulkan 1.1 devices.
+        minSdk = 26
+        targetSdk = 36
+
+        ndk {
+            // Phones, and the x86_64 emulator.
+            abiFilters 'arm64-v8a', 'x86_64'
+        }
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=c++_static',
+                          '-DHYOSHI_BUILD_TESTS=OFF',
+                          '-DHYOSHI_BUILD_SAMPLES=OFF',
+                          "-DHYOSHI_ANDROID_ASSETS_DIR=${nativeAssets.path.replace('\\', '/')}",
+                          "-DCPM_SOURCE_CACHE=${cpmCache.path.replace('\\', '/')}"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = new File(gameDir, 'CMakeLists.txt')
+            version = '4.1.2'
+        }
+    }
+
+    sourceSets {
+        main {
+            // SDL's activity and the engine's (com.britoshi.hyoshi.HyoshiActivity), which loads
+            // libmain.so.
+            java.srcDirs += new File(engineDir, 'platforms/android/java')
+            assets.srcDirs += nativeAssets
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = false
+            // Until the game has a release key, release builds are signed with the debug key, so
+            // they install for testing. Never publish one of these.
+            signingConfig = signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError = false
+    }
+}
+
+// The assets come out of the native build, so merge them after it.
+tasks.configureEach { task ->
+    def match = task.name =~ /^merge(\w+)Assets$/
+    if (match.matches()) {
+        task.dependsOn("externalNativeBuild${match.group(1)}")
+    }
+}
+
+// Copies the game's maps (content/charts) into dev-songs/, with an index of the files and their
+// sizes (an APK's assets can't be listed at run time). The game unpacks them on launch
+// (hyoshi::songs::UnpackBundledSongs), so a debug install has songs, like a desktop build reading
+// content/charts.
+abstract class BundleDevSongs extends DefaultTask {
+    @InputFiles
+    @PathSensitive(PathSensitivity.RELATIVE)
+    abstract ConfigurableFileCollection getCharts()
+
+    @Internal
+    abstract DirectoryProperty getChartsRoot()
+
+    @OutputDirectory
+    abstract DirectoryProperty getOutputDir()
+
+    @TaskAction
+    void bundle() {
+        def songs = new File(outputDir.get().asFile, 'dev-songs')
+        songs.deleteDir()
+        songs.mkdirs()
+        def root = chartsRoot.get().asFile.toPath()
+        def index = new StringBuilder()
+        charts.files.sort().each { file ->
+            def relative = root.relativize(file.toPath()).toString().replace('\\', '/')
+            def target = new File(songs, relative)
+            target.parentFile.mkdirs()
+            java.nio.file.Files.copy(file.toPath(), target.toPath())
+            index.append(file.length()).append('\t').append(relative).append('\n')
+        }
+        new File(songs, 'index.txt').setText(index.toString(), 'UTF-8')
+    }
+}
+
+def chartsDir = new File(gameDir, 'content/charts')
+def bundleDevSongs = tasks.register('bundleDevSongs', BundleDevSongs) {
+    // Videos stay behind: the game doesn't play them, and they're the biggest files. The APK
+    // packer drops dotfiles (.gitkeep), so they're left out of the index too.
+    charts.from(fileTree(chartsDir) {
+        exclude '**/*.mp4', '**/*.avi', '**/*.flv', '**/*.wmv', '**/*.mkv', '**/*.webm', '**/.*'
+    })
+    chartsRoot.set(chartsDir)
+}
+
+// Debug builds only. Release builds never carry them: they're local test maps, often copyrighted.
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(bundleDevSongs) { it.outputDir }
+    }
+}
