@@ -1,106 +1,101 @@
-# Hyoshi Engine
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.png">
+    <img alt="Hyoshi Engine" src="docs/images/logo-light.png" width="480">
+  </picture>
+</p>
 
-A mobile-first C++20 engine for rhythm games.
+<p align="center">
+  A C++20 game engine for rhythm games, for Android, macOS, and Windows.
+</p>
 
-Hyoshi is built on one premise: **the audio clock is the source of truth.** Song time comes from the audio device, input is timestamped by the OS, and judgment is integer-microsecond math, so results are deterministic and replays reproduce exactly. Rendering is Vulkan behind a small RHI, and every game style (Mania, Drum, Circle, Highway, Line) is meant to be a pluggable mode; Mania and Circle are built.
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="C++20" src="https://img.shields.io/badge/C%2B%2B-20-00599C.svg">
+  <img alt="Vulkan" src="https://img.shields.io/badge/graphics-Vulkan-AC162C.svg">
+  <img alt="Platforms" src="https://img.shields.io/badge/platforms-Android%20%7C%20macOS%20%7C%20Windows-lightgrey.svg">
+</p>
 
-- **Targets:** Android (Vulkan) and macOS (Vulkan through MoltenVK). Windows x64 (MSVC) builds and runs as a development host.
-- **Later:** iOS (Metal), Windows as a shipping target, Linux.
-- **License:** MIT (see [LICENSE](LICENSE)). The fonts it installs, Noto Sans JP, are under the SIL Open Font License 1.1; other dependencies keep their own licenses ([docs/REFERENCES.md](docs/REFERENCES.md)).
+---
 
-The games on it are developed separately, in their own repositories.
+Hyoshi is an engine for rhythm games. Song time comes from the audio device's playback position, input events carry the operating system's timestamps, and hits are judged in integer microseconds. The same chart and the same inputs always produce the same result, so replays play back exactly.
 
-## What's in it
+It renders with Vulkan (MoltenVK on macOS) and uses SDL3 for windowing and input and miniaudio for sound. Each style of rhythm game is a separate module: Mania and Circle are included, and Drum, Highway, and Line are planned.
 
-| Module | What it does |
-|---|---|
-| `core` | Logging, asserts, `Result<T>`, generational handles, integer time math, a lock-free SPSC queue and seqlock, a job system, environment-variable helpers |
-| `platform` | SDL3: the window, input with OS timestamps, the app lifecycle (Android backgrounding), the host clock, file and asset access, safe area, screen orientation |
-| `input` | Input events and a queue sorted by host time; trackpad areas mapped onto the window, as tablet drivers do |
-| `rhi` | A small render hardware interface and its Vulkan backend (volk, VMA; MoltenVK on macOS): swapchain with pre-rotation, pipeline cache, validation in debug builds |
-| `renderer` | `Camera2D` (the short side is 1080 units, so layouts know the orientation), `SpriteBatch`, `TextRenderer` (TrueType and OpenType, including CJK, as runtime distance-field glyphs), images and distance fields from PNG/JPEG |
-| `audio` | `IAudioBackend` on miniaudio (CoreAudio, AAudio, WASAPI), a mixer in the audio callback, decoding (WAV, MP3, FLAC, Ogg Vorbis), sample-exact scheduling on music frames |
-| `rhythm` | `SongClock` (song time anchored to the audio cursor, filtered, never rewinds), the chart format (`.rchart.json`), scroll maps, judgments, scoring, offset calibration |
-| `modes/mania` | Mania charts, the judge (with autoplay), and the playfield |
-| `modes/circle` | Circle (osu!standard) charts with slider paths and stacking, the judge (with autoplay), scoring, and the playfield |
-| `songs` | Chart loading (`.rchart.json`, and osu!mania and osu!standard `.osu` converted in memory), a song library that scans song folders with a mode's chart reader, and `SongPlayer`, which ties music to the song clock |
-| `ui` | An immediate-mode UI kit for game menus (buttons, toggles, sliders, choices, lists with scrolling; mouse, touch, and keyboard), and logos drawn as distance fields |
-| `app` | The application: the main loop, scenes and fades, the debug overlay (Dear ImGui, F1), development hooks, and the "Made with Hyoshi Engine" splash |
-| `debug` | Dear ImGui drawn through the RHI |
-| `editor` | The editor framework (desktop): a menu bar and dockable ImGui panels over the running game, which a game's editor adds to ([ADR 0002](docs/decisions/0002-editor-framework.md)) |
-| `tools/osu-import` | The osu!mania and osu!standard importers; `hyoshi-osu-import` converts osu!mania beatmaps to `.rchart.json` |
-| `tools/asset-cooker` | `hyoshi-asset-cooker`: app icons (window, Windows `.ico`, Android launcher and Play Store) from a logo |
+> [!WARNING]
+> Hyoshi is in early development. APIs change without notice, there are no releases yet, and Android has only been tested on the emulator.
 
-The design, milestones, and what was built where it differs from the plan are in [docs/DESIGN.md](docs/DESIGN.md). [docs/HANDOVER.md](docs/HANDOVER.md) has the current state, what is and isn't verified, invariants, and gotchas.
+## Features
 
-## Status
+- **Audio-driven timing.** `SongClock` follows the audio device's playback position. It never runs backwards, and it recovers from device stalls and seeks.
+- **Deterministic judgment and replays.** Judgment depends only on the chart and the timestamped inputs, so a replay reproduces the original run exactly.
+- **Game modes as modules.** Mania (vertical lanes, like osu!mania) and Circle (hit circles, sliders, and spinners, like osu!standard), each with a judge, scoring, autoplay, and a playfield renderer.
+- **osu! map import.** osu!mania and osu!standard `.osu` files load directly. `hyoshi-osu-import` converts osu!mania maps to Hyoshi's JSON chart format.
+- **2D renderer.** Sprite batching, distance-field text for any TrueType or OpenType font (including Japanese), safe areas, and Android screen rotation.
+- **Audio.** WAV, MP3, FLAC, and Ogg Vorbis; a mixer that runs in the audio callback; sounds scheduled to exact sample positions in the music.
+- **Game UI.** Immediate-mode buttons, toggles, sliders, and scrolling lists for menus, driven by mouse, touch, or keyboard.
+- **Editor framework.** A game can build a desktop editor: the game itself, with dockable Dear ImGui panels over it. Release builds contain no editor code.
+- **Debug tools.** An ImGui overlay (F1), Vulkan validation in debug builds, and environment variables for screenshots, timed exits, and stress tests.
 
-- **M0 Foundation:** done on macOS and Windows; Android builds and runs on the emulator (not yet on a phone). Tracy, CI, and ADR 0001 are still to do.
-- **M1 Vulkan bring-up:** done on macOS and Windows, validation clean, including surface loss and resize stress. Runs on the Android emulator.
-- **M2 2D renderer:** sprites (10,000 at 120 Hz on an M5 Max), text, distance-field images, safe area. Still to come: texture atlases, MSDF text, ASTC.
-- **M3 Audio and the song clock:** done and stress-tested on macOS and Windows (device stalls, random seeks). Plays on the Android emulator.
-- **M4 First playable (Mania):** chart format, judge, replays, autoplay, osu!mania import, song library, UI kit. The first game is built on them.
-- **M8 Circle mode (started ahead of M5 to M7):** osu!standard import, slider paths, stacking, the judge with note lock, scoring, autoplay, and the playfield. Sliders are held but not yet followed, and spinners aren't judged ([DESIGN.md section 16.4](docs/DESIGN.md#164-as-built-circle-m8-started-ahead-of-drum)). A second game is built on it.
+## Platform support
 
-## Building
-
-| Tool | Needed for | Install |
+| Platform | Graphics | Status |
 |---|---|---|
-| CMake 3.28+ and Ninja | Building | `brew install cmake ninja`, or `winget install Kitware.CMake Ninja-build.Ninja` |
-| macOS: Xcode Command Line Tools; Vulkan loader, MoltenVK, validation layers | Compiler, running | `xcode-select --install`; `brew install vulkan-loader molten-vk vulkan-validationlayers vulkan-tools spirv-tools` |
-| Windows: Visual Studio 2022 or 2026, "Desktop development with C++"; optionally the Vulkan SDK | MSVC; validation layers in debug builds | Visual Studio Installer; `winget install KhronosGroup.VulkanSDK` |
-| LLVM 19+ (clang-format, clang-tidy) | Code checks | `brew install llvm` (Visual Studio installs them on Windows) |
-| `slangc` | Shaders | Nothing to install: the build downloads a pinned release |
+| Android 8.0+ (arm64-v8a, x86_64) | Vulkan 1.1 | Builds and runs on the emulator. Not yet tested on a phone. |
+| macOS (Apple Silicon) | Vulkan through MoltenVK | Builds and runs. Debug builds report Vulkan validation errors ([known issue](docs/DEVELOPMENT.md#known-issues)). |
+| Windows (x64) | Vulkan | Builds and runs. Used for development; not yet a release target. |
+| iOS | Metal | Planned |
+| Linux | Vulkan | Planned |
 
-Dependencies (SDL3, spdlog, doctest, volk, VMA, glm, Dear ImGui, miniaudio, yyjson, stb, the fonts) come through CPM with pinned versions and are cached in `~/.cache/CPM`.
+## Getting started
+
+### Requirements
+
+| Tool | Notes |
+|---|---|
+| CMake 3.28+ and Ninja | `brew install cmake ninja`, or `winget install Kitware.CMake Ninja-build.Ninja` |
+| A C++20 compiler | macOS: Xcode Command Line Tools (`xcode-select --install`). Windows: Visual Studio 2022 or later with "Desktop development with C++". |
+| Vulkan runtime | macOS: `brew install vulkan-loader molten-vk vulkan-validationlayers vulkan-tools spirv-tools`. Windows: your GPU driver; the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) adds validation layers for debug builds. |
+| LLVM 19+ (optional) | `clang-format` and `clang-tidy` for the code checks. `brew install llvm`; Visual Studio includes them. |
+
+All other dependencies, including the Slang shader compiler, are downloaded at configure time with pinned versions through [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) and cached in `~/.cache/CPM`.
+
+### Build
 
 ```sh
-cmake --preset macos-debug            # or windows-debug, from an x64 Visual Studio developer environment
+git clone https://github.com/Britoshi/hyoshi-engine.git
+cd hyoshi-engine
+cmake --preset macos-debug
 cmake --build --preset macos-debug
-ctest --preset macos-debug            # unit tests
+ctest --preset macos-debug
 ./build/macos-debug/samples/metronome/HyoshiMetronome
 ```
 
-On Windows, configure and build from an x64 developer environment (the "x64 Native Tools Command Prompt for VS", or PowerShell after `Launch-VsDevShell.ps1 -Arch amd64 -HostArch amd64`); the sample is `build\windows-debug\samples\metronome\HyoshiMetronome.exe`. Use the `-release` presets for optimized builds.
+On Windows, use the `windows-debug` preset from an x64 developer environment: the "x64 Native Tools Command Prompt for VS", or PowerShell after `Launch-VsDevShell.ps1 -Arch amd64 -HostArch amd64`. The sample is then `build\windows-debug\samples\metronome\HyoshiMetronome.exe`.
 
-**The sample** (`samples/metronome`) is the smallest game on the engine: the splash, then a metronome whose beat flash follows the audio clock. F1 shows the clock's debug panel.
-
-**Code checks:** `cmake --build --preset <preset> --target format` (or `format-check`, `tidy`). Naming: PascalCase types, functions, and public members; camelCase locals and private members; UPPER_CASE constants.
-
-### Development hooks
-
-Debug builds enable the Vulkan validation layer, and an app exits with a failure code if validation reported anything, song time went backwards, or a scene reported a failed check. Environment variables for scripted checks, in any app on the engine:
-
-| Variable | Effect |
+| Preset | Platform |
 |---|---|
-| `HYOSHI_EXIT_AFTER_MS=3000` | Quit after 3 seconds |
-| `HYOSHI_SCREENSHOT=out.png` | Save frame 30 as a PNG (`HYOSHI_SCREENSHOT_FRAME=400` for another frame) |
-| `HYOSHI_SCREENSHOT_MS=5000` | Take the screenshot this long after startup instead (the frame rate is uncapped while the display sleeps) |
-| `HYOSHI_WINDOW_SIZE=720x1280` | Open the window at this size, e.g. portrait |
-| `HYOSHI_DEBUG_UI=1` | Show the debug overlay from the start (F1 toggles it) |
-| `HYOSHI_SCENE=clock` | Run the clock demo instead of the game |
-| `HYOSHI_STRESS_SURFACE=1` | Every 10 frames, alternately resize the window and destroy and recreate the surface |
-| `HYOSHI_STRESS_AUDIO=1` | Stop the audio device for the last 200 ms of every 3 seconds |
-| `HYOSHI_STRESS_SEEK=1` | Clock demo: seek to a random position every 1.5 seconds |
-| `HYOSHI_SPRITES=10000` | Add bouncing sprites, for renderer stress tests |
-| `HYOSHI_MUSIC=song.ogg`, `HYOSHI_BPM=128`, `HYOSHI_FIRST_BEAT_MS=350` | Clock demo: play a file instead of the generated metronome track, at this tempo |
+| `macos-debug`, `macos-release` | macOS, Apple Silicon |
+| `windows-debug`, `windows-release` | Windows x64, MSVC |
+
+The sample in `samples/metronome` is the smallest possible game: the splash screen, then a metronome whose flash follows the audio clock. Press F1 for the debug overlay.
 
 ## Making a game
 
-A game lives in its own repository and adds the engine as a git submodule. The layout the engine's tooling expects:
+A game lives in its own repository and includes the engine as a git submodule:
 
 ```
 my-game/
   CMakeLists.txt       add_subdirectory(hyoshi-engine), then hyoshi_add_app(...)
   hyoshi-engine/       this repository, as a submodule
-  src/                 the game: a hyoshi::app::Game and its scenes
-  content/textures/    the game's assets (app-icon.png: the window icon)
-  content/charts/      local maps for development (bundled into debug APKs)
-  windows/app.rc       the executable's icon (app.ico)
-  android/             the Gradle project (see below)
+  src/                 the game's code
+  content/textures/    the game's assets (app-icon.png is the window icon)
+  content/charts/      maps for development (bundled into debug APKs)
+  windows/app.rc       the Windows executable's icon
+  android/             the Gradle project
 ```
 
-The build:
+### CMake
 
 ```cmake
 cmake_minimum_required(VERSION 3.28)
@@ -114,18 +109,20 @@ hyoshi_add_app(my_game
 hyoshi_add_code_checks(src)
 ```
 
-`hyoshi_add_app` builds an executable on desktops and `libmain.so` on Android, links every engine module, and installs the engine's fonts and logos (under `engine/`) and each `ASSETS` folder next to the executable or into the APK.
+`hyoshi_add_app` builds an executable on desktop and `libmain.so` on Android, links every engine module, and installs the engine's fonts and logos and each `ASSETS` folder next to the executable or into the APK.
 
-The code: a `hyoshi::app::Game` sets itself up once the window, GPU, and audio exist, and hands the Application its first scene. Scenes derive from `hyoshi::app::Scene`, draw through `hyoshi::ui::Ui` each frame, and move on with `SwitchTo(std::make_unique<NextScene>(...))`. `samples/metronome/Main.cpp` is a complete example:
+### Code
+
+A game implements `hyoshi::app::Game`. The engine calls `Initialize` once the window, GPU, and audio are ready, then asks for the first scene. Scenes derive from `hyoshi::app::Scene`, draw through `hyoshi::ui::Ui` each frame, and change with `SwitchTo(std::make_unique<NextScene>(...))`.
 
 ```cpp
 class MyGame : public hyoshi::app::Game
 {
 public:
-    hyoshi::Result<void> Initialize(hyoshi::app::AppServices& services) override;   // settings, content
-    std::unique_ptr<hyoshi::app::Scene> CreateFirstScene() override;                 // after the splash
-    void Update() override;                                                          // every frame
-    void Save() override;                                                            // backgrounding, exit
+    hyoshi::Result<void> Initialize(hyoshi::app::AppServices& services) override;   // load settings and content
+    std::unique_ptr<hyoshi::app::Scene> CreateFirstScene() override;                 // shown after the splash
+    void Update() override;                                                          // called every frame
+    void Save() override;                                                            // on backgrounding and exit
 };
 
 int main(int, char*[])
@@ -141,14 +138,21 @@ int main(int, char*[])
 }
 ```
 
-**The game's editor.** A game can also build an editor: the game itself, run with a menu bar and dockable ImGui panels over it, to which the game adds its own panels ([ADR 0002](docs/decisions/0002-editor-framework.md)). The game's code goes in a library that both executables link, and `hyoshi_add_editor` (desktop only; nothing on Android) builds the editor like `hyoshi_add_app` plus the editor framework, which the game's own executable never links:
+[`samples/metronome/Main.cpp`](samples/metronome/Main.cpp) is a complete example.
+
+### Editor
+
+A game can also build a desktop editor: the game runs with a menu bar and dockable ImGui panels over it, and the game adds its own panels. Put the game's code in a library that both executables link, and build the editor with `hyoshi_add_editor`. It does nothing on Android, and the game's own executable never links the editor.
 
 ```cmake
 add_library(my_game_code STATIC src/MyGame.cpp)
 target_link_libraries(my_game_code PUBLIC hyoshi::engine)
+
 hyoshi_add_app(my_game OUTPUT_NAME MyGame SOURCES src/Main.cpp)
 target_link_libraries(my_game PRIVATE my_game_code)
-hyoshi_add_editor(my_game_editor OUTPUT_NAME MyGameEditor SOURCES src/editor/EditorMain.cpp src/editor/MyEditor.cpp)
+
+hyoshi_add_editor(my_game_editor OUTPUT_NAME MyGameEditor
+    SOURCES src/editor/EditorMain.cpp src/editor/MyEditor.cpp)
 if(TARGET my_game_editor)
     target_link_libraries(my_game_editor PRIVATE my_game_code)
 endif()
@@ -159,7 +163,7 @@ class MyPanel : public hyoshi::editor::Panel
 {
 public:
     MyPanel() : Panel("My panel") {}
-    void Build() override { ImGui::Text("..."); }    // the window's contents, every frame it's open
+    void Build() override { ImGui::Text("..."); }    // the panel's contents, every frame it's open
 };
 
 class MyEditor : public hyoshi::editor::Editor
@@ -167,24 +171,22 @@ class MyEditor : public hyoshi::editor::Editor
 public:
     hyoshi::Result<void> Initialize(hyoshi::editor::EditorServices& services) override
     {
-        services.AddPanel(std::make_unique<MyPanel>());   // after the game's Initialize
+        services.AddPanel(std::make_unique<MyPanel>());   // runs after the game's Initialize
         return {};
     }
 };
 
-// EditorMain.cpp: the game's name, so the editor shares its settings; no splash.
+// EditorMain.cpp: use the game's name so the editor shares its settings.
 config.Name = "My Game";
 config.WindowTitle = "My Game Editor";
 int exitCode = hyoshi::editor::Run(config, game, editor);
 ```
 
-Game code can check `AppServices::IsEditor` to skip what only suits players. The editor saves its panel layout in `editor-imgui.ini`, next to the game's settings.
-
-`hyoshi-asset-cooker icons <logo.png> <game folder>` writes a game's icons into that layout: `content/textures/app-icon.png`, `windows/app.ico`, and the Android launcher and Play Store icons.
+Game code can check `AppServices::IsEditor` to skip things that only make sense for players. The editor saves its panel layout in `editor-imgui.ini`, next to the game's settings. The design is described in [docs/decisions/0002-editor-framework.md](docs/decisions/0002-editor-framework.md).
 
 ### Android
 
-A game's `android/app/build.gradle` sets its identity and applies the engine's `platforms/android/hyoshi-app.gradle`, which does the rest: the native build with the pinned NDK and CMake, SDL's Java glue and the engine's activity (`com.britoshi.hyoshi.HyoshiActivity`), assets, and, in debug builds only, the game's `content/charts` bundled into the APK and unpacked on first launch.
+A game's `android/app/build.gradle` sets the app's identity and applies the engine's [`platforms/android/hyoshi-app.gradle`](platforms/android/hyoshi-app.gradle), which handles the native build with the pinned NDK and CMake, SDL's Java code and the engine's activity, and assets. Debug builds also bundle the game's `content/charts` into the APK.
 
 ```groovy
 plugins { id 'com.android.application' }
@@ -202,20 +204,72 @@ ext.hyoshiGameDir = file('../..')
 apply from: "${hyoshiEngineDir}/platforms/android/hyoshi-app.gradle"
 ```
 
-The manifest names the engine's activity, `com.britoshi.hyoshi.HyoshiActivity`, and requires `android.hardware.vulkan.version` 0x401000. Building needs a JDK 17+, the Android SDK (platform 36), NDK `27.3.13750724`, and the SDK's CMake `4.1.2` (`sdkmanager "ndk;27.3.13750724" "cmake;4.1.2"`); then `gradlew assembleDebug` in the game's `android` folder.
+The manifest uses the activity `com.britoshi.hyoshi.HyoshiActivity` and requires `android.hardware.vulkan.version` `0x401000` (Vulkan 1.1).
 
-## Repository layout
+To build, install JDK 17+, the Android SDK (platform 36), NDK `27.3.13750724`, and the SDK's CMake `4.1.2` (`sdkmanager "ndk;27.3.13750724" "cmake;4.1.2"`), then run `gradlew assembleDebug` in the game's `android` folder.
+
+### Tools
+
+| Tool | Usage |
+|---|---|
+| `hyoshi-osu-import` | `hyoshi-osu-import <input.osu> <output.rchart.json> [--force]` converts an osu!mania map to Hyoshi's chart format. |
+| `hyoshi-asset-cooker` | `hyoshi-asset-cooker icons <logo.png> <game folder>` writes a game's icons from its logo: the window icon, `windows/app.ico`, and the Android launcher and Play Store icons. |
+
+## Project layout
 
 | Path | Contents |
 |---|---|
-| `engine/` | The engine's modules (table above), each a CMake target `hyoshi::<module>`; `hyoshi::engine` is all of them |
-| `modes/mania/` | The Mania mode |
-| `modes/circle/` | The Circle mode |
+| `engine/core` | Logging, asserts, `Result<T>`, handles, integer time math, lock-free queue and seqlock, job system |
+| `engine/platform` | SDL3 window, timestamped input, app lifecycle, host clock, file and asset access, safe area, orientation |
+| `engine/input` | Input events, a queue sorted by timestamp, and trackpad-as-tablet mapping |
+| `engine/rhi` | The render hardware interface and its Vulkan backend (volk, VMA) |
+| `engine/renderer` | `Camera2D`, `SpriteBatch`, `TextRenderer`, image loading and distance fields |
+| `engine/audio` | The audio backend interface, miniaudio backend, mixer, and decoders |
+| `engine/rhythm` | `SongClock`, the chart format (`.rchart.json`), scroll maps, judgment, scoring, offset calibration |
+| `engine/songs` | Chart loading, the song library, and `SongPlayer`, which ties music to the song clock |
+| `engine/ui` | The immediate-mode game UI and logo rendering |
+| `engine/app` | The main loop, scenes and transitions, the debug overlay, and the splash screen |
+| `engine/debug` | Dear ImGui drawn through the RHI |
+| `engine/editor` | The editor framework (desktop only) |
+| `modes/` | Game modes: `mania`, `circle` |
 | `tools/` | `osu-import`, `asset-cooker` |
-| `samples/metronome/` | The sample app |
-| `shaders/` | Slang sources, compiled to SPIR-V 1.3 and embedded at build time |
-| `content/textures/` | The engine's logos, for the splash |
-| `platforms/` | Per-platform glue: the Windows UTF-8 manifest, SDL's Android Java sources and the engine's activity, `hyoshi-app.gradle` |
-| `cmake/` | CPM, pinned dependencies, warnings, shaders, `hyoshi_add_app`, `hyoshi_add_editor`, code checks |
-| `tests/` | doctest unit tests and replay fixtures |
-| `docs/` | Design, references, handover, architecture decision records (`decisions/`) |
+| `samples/` | The metronome sample |
+| `shaders/` | Slang shaders, compiled to SPIR-V at build time |
+| `platforms/` | Windows manifest, Android Java code and Gradle script |
+| `cmake/` | Dependencies, compiler warnings, shader compilation, `hyoshi_add_app`, `hyoshi_add_editor`, code checks |
+| `tests/` | Unit tests (doctest) and replay fixtures |
+| `docs/` | Documentation |
+
+Each engine module is a CMake target named `hyoshi::<module>`. `hyoshi::engine` links all of them.
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md): how the modules fit together, the main loop, and how time flows from the audio device to judgment.
+- [Development](docs/DEVELOPMENT.md): debug environment variables, stress tests, platform notes, and known issues.
+- [Design document](docs/DESIGN.md): the full design and roadmap.
+- [Decision records](docs/decisions/): the reasoning behind major design choices.
+- [References](docs/REFERENCES.md): pinned dependency versions and further reading.
+
+## Roadmap
+
+- Fix the Vulkan validation errors on macOS.
+- Test on Android phones: touch, display cutouts, performance, and real audio latency.
+- Continuous integration for macOS and Windows.
+- Circle mode: slider ticks, repeats, and follow judgment; spinner judgment.
+- Precise keyboard timestamps on Windows.
+- An audio offset calibration screen, with offsets saved per output device.
+- A chart editor built on the editor framework.
+- More game modes: Drum, Highway, and Line.
+- iOS with a Metal backend, and Linux.
+
+## Contributing
+
+Bug reports, questions, and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test, and submit changes.
+
+## License
+
+Hyoshi Engine is released under the [MIT License](LICENSE).
+
+The engine installs the Noto Sans JP fonts, which are under the SIL Open Font License 1.1. Third-party libraries keep their own licenses; see [docs/REFERENCES.md](docs/REFERENCES.md).
+
+Built with [SDL3](https://github.com/libsdl-org/SDL), [volk](https://github.com/zeux/volk), [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator), [Slang](https://github.com/shader-slang/slang), [miniaudio](https://github.com/mackron/miniaudio), [Dear ImGui](https://github.com/ocornut/imgui), [glm](https://github.com/g-truc/glm), [spdlog](https://github.com/gabime/spdlog), [yyjson](https://github.com/ibireme/yyjson), [stb](https://github.com/nothings/stb), and [doctest](https://github.com/doctest/doctest).
