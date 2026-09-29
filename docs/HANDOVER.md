@@ -2,7 +2,7 @@
 
 For whoever works on Hyoshi Engine next, human or AI. Read this first, then [README.md](../README.md) (modules, build, making a game, development hooks) and [DESIGN.md](DESIGN.md) (the plan, with "As built" notes where the code differs). Update this file at the end of every working session.
 
-Last updated: 2026-09-28, trackpad fingers as input events (Mac) and the pointer lock. Before that, 2026-09-28, the Circle mode (M8, started early; DESIGN.md section 16.4), chart readers for the song library, and `SpriteBatch::KeepOrder`, and scenes that own textures surviving a scene switch. Before that, 2026-09-28, the editor framework's milestone 0 ([ADR 0002](decisions/0002-editor-framework.md)) and the first macOS build since mid M4. Before that, 2026-09-28, the repository's first commit. Before that, the engine and its first game shared one private repository; on 2026-09-28 they were split. The engine starts here with fresh history. The game keeps the old history in its own repository and uses this one as a git submodule.
+Last updated: 2026-09-28, trackpad areas (size, rotation, position) and a finger tracker. Before that, 2026-09-28, trackpad fingers as input events (Mac) and the pointer lock. Before that, 2026-09-28, the Circle mode (M8, started early; DESIGN.md section 16.4), chart readers for the song library, and `SpriteBatch::KeepOrder`, and scenes that own textures surviving a scene switch. Before that, 2026-09-28, the editor framework's milestone 0 ([ADR 0002](decisions/0002-editor-framework.md)) and the first macOS build since mid M4. Before that, 2026-09-28, the repository's first commit. Before that, the engine and its first game shared one private repository; on 2026-09-28 they were split. The engine starts here with fresh history. The game keeps the old history in its own repository and uses this one as a git submodule.
 
 ## Where things stand
 
@@ -25,7 +25,7 @@ Hyoshi Engine is a mobile-first C++20 rhythm game engine (Vulkan through an RHI,
 
 ### Verified
 
-By script (the development hooks, screenshots), by unit tests (82 cases), and through the games built on it, on Windows unless noted.
+By script (the development hooks, screenshots), by unit tests (87 cases), and through the games built on it, on Windows unless noted.
 
 - The clock never goes backwards across device stalls and random seeks, and no scheduled clicks are late (`HYOSHI_SCENE=clock HYOSHI_STRESS_SEEK=1 HYOSHI_STRESS_AUDIO=1`, in the sample). No resyncs on macOS; on Windows a stress run sometimes has one (see "Known quirks").
 - Autoplay scores 1,000,000 through the Mania judge, including across device stalls, and on real osu!mania maps (MP3), on Windows, macOS (before the UI work), and the Android emulator.
@@ -45,7 +45,7 @@ By script (the development hooks, screenshots), by unit tests (82 cases), and th
 - **FLAC and Ogg Vorbis decoding.** WAV and MP3 are exercised.
 - **macOS**: validation (above), and the stress checks since mid M4.
 - **The editor framework on Windows and Android.** Not built there after the change (2026-09-28): the `EditorLayer` changes to `Application`, the ImGui docking branch, and `hyoshi_add_editor` with MSVC; on Android, that `engine/editor` and `hyoshi_add_editor` stay out of the build, and that the docking branch still builds for the game. Build both before relying on them.
-- **Trackpad events on a real trackpad** (2026-09-28): whether fingers arrive with the pointer locked, and how their timestamps compare with the keys'. The headless UI test only checks that menus ignore them.
+- **Trackpad events on a real trackpad** (2026-09-28): they arrive on a MacBook's trackpad with the pointer free (a game's screenshot caught a finger at its place on the pad); not yet known: whether they keep arriving with the pointer locked, and how their timestamps compare with the keys'. Unit tests cover the area mapping, the finger tracker, and menus ignoring the events; not how any of it feels.
 - **The Circle mode on Windows and Android.** Not built there, nor the engine changes that came with it (2026-09-28: `SpriteBatch::KeepOrder`, `Application`'s ended scene, the song library's chart readers). And no one has played it by hand yet: real mouse and touch aim, and how its timing feels.
 - **The editor by hand**: docking, the View menu, File > Quit, and typing into a panel while a game runs (the ImGui windows should take the keys). Which panels are open isn't saved between runs; where they are is.
 
@@ -55,7 +55,7 @@ By script (the development hooks, screenshots), by unit tests (82 cases), and th
 |---|---|
 | `engine/core` | `Result<T>`, logging, handles, `Time.h` (integer µs and frame math, `ToMilliseconds`), `Env.h` (environment helpers), `SpscQueue`, `SeqLock`, `JobSystem` |
 | `engine/platform` | SDL3: window, events into `InputQueue` (keys with repeats marked, wheel, touch, pointer, Mac trackpad fingers), pointer lock, lifecycle, host clock, base, user data, asset, and shared storage paths, safe area, orientation, window icon, `LoadFile` / `SaveFile` (atomic) / `MakeDirectory` |
-| `engine/input` | `InputEvent`, `InputQueue` (sorted by host time) |
+| `engine/input` | `InputEvent`, `InputQueue` (sorted by host time), `Trackpad` (a trackpad area mapped onto the window, as tablet drivers do; `TrackpadFingers`, the newest aims) |
 | `engine/rhi` | `IRenderDevice` and the Vulkan backend (volk, VMA, MoltenVK on macOS) |
 | `engine/renderer` | `Camera2D` (short side 1080), `SpriteBatch` (sprites can be distance fields; `WithAlpha`; `KeepOrder` layers draw in submission order), `TextRenderer` (runtime SDF glyphs from TTF/OTF, atlas pages), `Image` (PNG/JPEG, distance fields from alpha, textures) |
 | `engine/debug` | Dear ImGui overlay (positions saved in `imgui.ini` in the user data directory; the editor's in `editor-imgui.ini`, with docking on) |

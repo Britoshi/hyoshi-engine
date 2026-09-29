@@ -16,7 +16,7 @@ The games on it are developed separately, in their own repositories.
 |---|---|
 | `core` | Logging, asserts, `Result<T>`, generational handles, integer time math, a lock-free SPSC queue and seqlock, a job system, environment-variable helpers |
 | `platform` | SDL3: the window, input with OS timestamps, the app lifecycle (Android backgrounding), the host clock, file and asset access, safe area, screen orientation |
-| `input` | Input events and a queue sorted by host time |
+| `input` | Input events and a queue sorted by host time; trackpad areas mapped onto the window, as tablet drivers do |
 | `rhi` | A small render hardware interface and its Vulkan backend (volk, VMA; MoltenVK on macOS): swapchain with pre-rotation, pipeline cache, validation in debug builds |
 | `renderer` | `Camera2D` (the short side is 1080 units, so layouts know the orientation), `SpriteBatch`, `TextRenderer` (TrueType and OpenType, including CJK, as runtime distance-field glyphs), images and distance fields from PNG/JPEG |
 | `audio` | `IAudioBackend` on miniaudio (CoreAudio, AAudio, WASAPI), a mixer in the audio callback, decoding (WAV, MP3, FLAC, Ogg Vorbis), sample-exact scheduling on music frames |
