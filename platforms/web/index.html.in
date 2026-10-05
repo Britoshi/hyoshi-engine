@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>@APP_TITLE@</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #ccc; overflow: hidden; }
+  body { font: 14px/1.5 system-ui, sans-serif; }
+  canvas { display: block; width: 100%; height: 100%; outline: none; }
+  #status { position: fixed; inset: 0; display: grid; place-items: center; text-align: center; padding: 16px;
+            pointer-events: none; white-space: pre-line; }
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="-1"></canvas>
+<div id="status">Loading…</div>
+<script>
+  // Hyoshi web build. The WebGPU device is requested here, before the module starts, because
+  // adapter and device requests are asynchronous; the engine picks it up through
+  // Module.preinitializedWebGPUDevice. Settings in the URL (?HYOSHI_AUTOPLAY=1) become environment
+  // variables (pre.js).
+  const statusText = document.getElementById("status");
+  const fail = (message) => { statusText.textContent = message; console.error(message); };
+
+  (async () => {
+    if (!crossOriginIsolated) {
+      console.warn("Not cross-origin isolated: the page needs COOP/COEP headers for threads.");
+    }
+    if (!navigator.gpu) {
+      return fail("This browser doesn't support WebGPU.");
+    }
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) {
+      return fail("No WebGPU adapter is available.");
+    }
+    const device = await adapter.requestDevice();
+    device.lost.then((info) => fail("The WebGPU device was lost: " + info.message));
+
+    window.Module = {
+      canvas: document.getElementById("canvas"),
+      preinitializedWebGPUDevice: device,
+      webgpuErrorCount: 0,
+      setStatus: (text) => { if (text) statusText.textContent = text; },
+      onRuntimeInitialized: () => { statusText.textContent = ""; },
+      onAbort: (what) => fail("The game stopped: " + what),
+    };
+    device.addEventListener("uncapturederror", (event) => {
+      window.Module.webgpuErrorCount++;
+      console.error("WebGPU:", event.error.message);
+    });
+
+    const script = document.createElement("script");
+    script.src = "@APP_OUTPUT_NAME@.js";
+    script.onerror = () => fail("Could not load @APP_OUTPUT_NAME@.js");
+    document.body.appendChild(script);
+  })();
+</script>
+</body>
+</html>

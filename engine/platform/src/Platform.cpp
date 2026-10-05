@@ -188,6 +188,9 @@ Result<void> Platform::Initialize(const PlatformConfig& config)
     // Immersive: the status and navigation bars hide until swiped in. Layouts keep to the safe
     // area, clear of cutouts.
     windowFlags |= SDL_WINDOW_FULLSCREEN;
+#elif defined(SDL_PLATFORM_EMSCRIPTEN)
+    // The canvas fills the page and follows the browser window's size.
+    windowFlags |= SDL_WINDOW_FILL_DOCUMENT;
 #endif
     if (config.EnableVulkan)
     {

@@ -7,7 +7,12 @@ struct DrawConstants
     float2 rotation; // cos, sin of the swapchain pre-rotation
 };
 
+// WebGPU has no push constants: web builds read them from a uniform buffer (engine/rhi/webgpu).
+#if defined(HYOSHI_WGSL)
+[[vk::binding(0, 1)]]
+#else
 [[vk::push_constant]]
+#endif
 ConstantBuffer<DrawConstants> constants;
 
 [[vk::binding(0, 0)]]
@@ -35,6 +40,10 @@ VertexOutput vertexMain(VertexInput input)
 
     VertexOutput output;
     output.position = float4(p.x * r.x - p.y * r.y, p.x * r.y + p.y * r.x, 0.0, 1.0);
+#if defined(HYOSHI_WGSL)
+    // Clip space y points up in WebGPU, down in Vulkan.
+    output.position.y = -output.position.y;
+#endif
     output.uv = input.uv;
     output.color = input.color;
     return output;

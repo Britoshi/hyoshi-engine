@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace hyoshi::rhi
@@ -170,6 +171,8 @@ struct PipelineDesc
 {
     // One SPIR-V module holding both entry points, as produced by hyoshi_add_shaders().
     std::span<const uint32_t> Spirv;
+    // The same as WGSL, for WebGPU (web builds).
+    std::string_view Wgsl;
     const char* VertexEntry = "vertexMain";
     const char* FragmentEntry = "fragmentMain";
 

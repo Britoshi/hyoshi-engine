@@ -10,7 +10,7 @@ add_subdirectory(ui)
 add_subdirectory(songs)
 add_subdirectory(app)
 # Desktop only, like the editors built on it.
-if(NOT ANDROID)
+if(NOT ANDROID AND NOT EMSCRIPTEN)
     add_subdirectory(editor)
 endif()
 

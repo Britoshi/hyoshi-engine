@@ -21,6 +21,17 @@
 #include <string_view>
 #include <utility>
 
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/em_js.h>
+
+// The browser draws the canvas and delivers input only while the page's code isn't running: give
+// control back until the next display frame. This needs JSPI (or Asyncify) at link time. The body
+// is JavaScript, which clang-format would break.
+// clang-format off
+EM_ASYNC_JS(void, WaitForAnimationFrame, (), { await new Promise((resolve) => requestAnimationFrame(resolve)); });
+// clang-format on
+#endif
+
 namespace hyoshi::app
 {
 
@@ -143,6 +154,9 @@ int Application::Run()
 
     while (!platform.IsQuitRequested())
     {
+#if defined(__EMSCRIPTEN__)
+        WaitForAnimationFrame();
+#endif
         platform.PumpEvents();
 
         if (exitAfterMs && platform.GetHostTimeNs() - startTime >= *exitAfterMs * hyoshi::NS_PER_MS)
@@ -338,7 +352,9 @@ hyoshi::Result<void> Application::Initialize()
     platform::PlatformConfig platformConfig;
     platformConfig.AppName = config.Name;
     platformConfig.WindowTitle = config.WindowTitle.empty() ? config.Name : config.WindowTitle;
+#if !defined(__EMSCRIPTEN__)
     platformConfig.EnableVulkan = true;
+#endif
     // HYOSHI_WINDOW_SIZE=720x1280 opens a portrait window, to check layouts on the desktop.
     if (const char* size = std::getenv("HYOSHI_WINDOW_SIZE"))
     {

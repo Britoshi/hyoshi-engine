@@ -37,37 +37,40 @@ if(HYOSHI_BUILD_TESTS)
     )
 endif()
 
-# Vulkan: headers pinned to an SDK release, loaded at runtime through volk.
-CPMAddPackage(
-    NAME VulkanHeaders
-    SYSTEM YES
-    GITHUB_REPOSITORY KhronosGroup/Vulkan-Headers
-    GIT_TAG vulkan-sdk-1.4.357.0
-)
+# Vulkan: headers pinned to an SDK release, loaded at runtime through volk. Web builds draw with
+# WebGPU instead (Emscripten's emdawnwebgpu port, engine/rhi/webgpu).
+if(NOT EMSCRIPTEN)
+    CPMAddPackage(
+        NAME VulkanHeaders
+        SYSTEM YES
+        GITHUB_REPOSITORY KhronosGroup/Vulkan-Headers
+        GIT_TAG vulkan-sdk-1.4.357.0
+    )
 
-CPMAddPackage(
-    NAME volk
-    SYSTEM YES
-    GITHUB_REPOSITORY zeux/volk
-    GIT_TAG 1.4.350
-    OPTIONS
-        "VOLK_PULL_IN_VULKAN OFF"
-        "VOLK_INSTALL OFF"
-)
-target_link_libraries(volk PUBLIC Vulkan::Headers)
+    CPMAddPackage(
+        NAME volk
+        SYSTEM YES
+        GITHUB_REPOSITORY zeux/volk
+        GIT_TAG 1.4.350
+        OPTIONS
+            "VOLK_PULL_IN_VULKAN OFF"
+            "VOLK_INSTALL OFF"
+    )
+    target_link_libraries(volk PUBLIC Vulkan::Headers)
 
-# Header-only; the implementation is compiled in the Vulkan backend.
-CPMAddPackage(
-    NAME VulkanMemoryAllocator
-    GITHUB_REPOSITORY GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
-    GIT_TAG v3.4.0
-    DOWNLOAD_ONLY YES
-)
-add_library(hyoshi_vma INTERFACE)
-target_include_directories(hyoshi_vma SYSTEM INTERFACE ${VulkanMemoryAllocator_SOURCE_DIR}/include)
-target_link_libraries(hyoshi_vma INTERFACE volk)
-# Vulkan functions come from volk (vmaImportVulkanFunctionsFromVolk), never linked statically.
-target_compile_definitions(hyoshi_vma INTERFACE VMA_STATIC_VULKAN_FUNCTIONS=0 VMA_DYNAMIC_VULKAN_FUNCTIONS=0)
+    # Header-only; the implementation is compiled in the Vulkan backend.
+    CPMAddPackage(
+        NAME VulkanMemoryAllocator
+        GITHUB_REPOSITORY GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+        GIT_TAG v3.4.0
+        DOWNLOAD_ONLY YES
+    )
+    add_library(hyoshi_vma INTERFACE)
+    target_include_directories(hyoshi_vma SYSTEM INTERFACE ${VulkanMemoryAllocator_SOURCE_DIR}/include)
+    target_link_libraries(hyoshi_vma INTERFACE volk)
+    # Vulkan functions come from volk (vmaImportVulkanFunctionsFromVolk), never linked statically.
+    target_compile_definitions(hyoshi_vma INTERFACE VMA_STATIC_VULKAN_FUNCTIONS=0 VMA_DYNAMIC_VULKAN_FUNCTIONS=0)
+endif()
 
 # stb has no releases; pinned to a commit.
 CPMAddPackage(

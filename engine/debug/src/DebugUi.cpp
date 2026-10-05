@@ -1,6 +1,10 @@
 #include "debug/DebugUi.h"
 
+#if defined(__EMSCRIPTEN__)
+#include "DebugUi.wgsl.h"
+#else
 #include "DebugUi.spv.h"
+#endif
 
 #include "core/Log.h"
 #include "platform/Platform.h"
@@ -71,7 +75,11 @@ Result<void> DebugUi::Initialize(rhi::IRenderDevice& renderDevice, platform::Pla
     platform->SetEventHook([](const SDL_Event& event) { ImGui_ImplSDL3_ProcessEvent(&event); });
 
     rhi::PipelineDesc pipelineDesc;
+#if defined(__EMSCRIPTEN__)
+    pipelineDesc.Wgsl = DEBUG_UI_WGSL;
+#else
     pipelineDesc.Spirv = DEBUG_UI_SPIRV;
+#endif
     pipelineDesc.Blend = rhi::BlendMode::Alpha;
     pipelineDesc.PushConstantSize = sizeof(renderer::ClipTransform);
     pipelineDesc.TextureCount = 1;

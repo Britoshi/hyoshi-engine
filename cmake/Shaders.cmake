@@ -38,14 +38,43 @@ find_program(HYOSHI_SLANGC slangc HINTS ${slang_SOURCE_DIR}/bin NO_DEFAULT_PATH 
 find_program(HYOSHI_SPIRV_VAL spirv-val HINTS $ENV{VULKAN_SDK}/bin /opt/homebrew/bin /usr/local/bin)
 
 set(HYOSHI_EMBED_SPIRV_SCRIPT ${CMAKE_CURRENT_LIST_DIR}/EmbedSpirv.cmake)
+set(HYOSHI_EMBED_WGSL_SCRIPT ${CMAKE_CURRENT_LIST_DIR}/EmbedWgsl.cmake)
 
 # hyoshi_add_shaders(<target> <file.slang>...)
 # Compiles each file (all [shader(...)] entry points, names preserved) to SPIR-V, validates it for
 # Vulkan 1.1 when spirv-val is available, and embeds it as a header: Triangle.slang becomes
 # "Triangle.spv.h" defining TRIANGLE_SPIRV.
+#
+# Web builds compile to WGSL instead, with HYOSHI_WGSL defined (push constants become a uniform
+# buffer there): Triangle.slang becomes "Triangle.wgsl.h" defining TRIANGLE_WGSL.
 function(hyoshi_add_shaders target)
     set(outputDir ${CMAKE_CURRENT_BINARY_DIR}/shaders)
     file(MAKE_DIRECTORY ${outputDir})
+
+    if(EMSCRIPTEN)
+        foreach(source IN LISTS ARGN)
+            get_filename_component(name ${source} NAME_WE)
+            string(REGEX REPLACE "([a-z0-9])([A-Z])" "\\1_\\2" symbol ${name})
+            string(TOUPPER "${symbol}_WGSL" symbol)
+
+            set(wgsl ${outputDir}/${name}.wgsl)
+            set(header ${outputDir}/${name}.wgsl.h)
+            add_custom_command(
+                OUTPUT ${wgsl} ${header}
+                COMMAND ${HYOSHI_SLANGC} ${source} -target wgsl -DHYOSHI_WGSL -warnings-as-errors all -o ${wgsl}
+                        -depfile ${wgsl}.d
+                COMMAND ${CMAKE_COMMAND} -DINPUT=${wgsl} -DOUTPUT=${header} -DNAME=${symbol}
+                        -P ${HYOSHI_EMBED_WGSL_SCRIPT}
+                DEPENDS ${source} ${HYOSHI_EMBED_WGSL_SCRIPT}
+                DEPFILE ${wgsl}.d
+                COMMENT "Compiling shader ${name}.slang to WGSL"
+                VERBATIM
+            )
+            target_sources(${target} PRIVATE ${header})
+        endforeach()
+        target_include_directories(${target} PRIVATE ${outputDir})
+        return()
+    endif()
 
     foreach(source IN LISTS ARGN)
         get_filename_component(name ${source} NAME_WE)
