@@ -25,8 +25,11 @@
   const fail = (message) => { statusText.textContent = message; console.error(message); };
 
   (async () => {
+    // Threads need SharedArrayBuffer, which needs the page served with COOP and COEP headers.
     if (!crossOriginIsolated) {
-      console.warn("Not cross-origin isolated: the page needs COOP/COEP headers for threads.");
+      return fail("This page isn't cross-origin isolated, so the game can't start its threads.\n" +
+                  "The server must send Cross-Origin-Opener-Policy: same-origin and\n" +
+                  "Cross-Origin-Embedder-Policy: require-corp for this page.");
     }
     if (!navigator.gpu) {
       return fail("This browser doesn't support WebGPU.");
