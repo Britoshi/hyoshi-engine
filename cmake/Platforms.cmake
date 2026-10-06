@@ -47,6 +47,8 @@ function(hyoshi_configure_web_app target)
         -sDEFAULT_PTHREAD_STACK_SIZE=1MB
         -sENVIRONMENT=web,worker
         "--pre-js=${webDir}/pre.js"
+        # IndexedDB for the user data folder (pre.js), so settings and imported maps persist.
+        -lidbfs.js
         $<$<CONFIG:Debug>:-sASSERTIONS=1>
         ${preloadOptions}
     )

@@ -8,6 +8,25 @@
 #if defined(SDL_PLATFORM_ANDROID)
 #include <jni.h>
 #endif
+#if defined(SDL_PLATFORM_EMSCRIPTEN)
+#include <emscripten/em_js.h>
+
+// Copies the user data folder, an IndexedDB mount (platforms/web/pre.js), to the browser's storage.
+// Returns 0 while an earlier copy is still running. The body is JavaScript, which clang-format
+// would break.
+// clang-format off
+EM_JS(int, StartStorageSync, (), {
+    if (!Module["hyoshiStorageMounted"]) return 1;
+    if (Module["hyoshiStorageSyncing"]) return 0;
+    Module["hyoshiStorageSyncing"] = true;
+    FS.syncfs(false, (error) => {
+        Module["hyoshiStorageSyncing"] = false;
+        if (error) console.warn("Could not save to browser storage:", error);
+    });
+    return 1;
+});
+// clang-format on
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -28,6 +47,10 @@ struct LifecycleState
 
 namespace
 {
+
+// Set when SaveFile or MakeDirectory changes a file, from any thread. The web build copies the
+// changes to the browser's storage once a frame.
+std::atomic<bool> isStorageChanged = false;
 
 bool ToLifecycleEvent(Uint32 type, LifecycleEvent& outEvent)
 {
@@ -313,6 +336,15 @@ void Platform::PumpEvents()
             lifecycle->IsQuitRequested = true;
             break;
 
+        case SDL_EVENT_DROP_FILE:
+            // The path lives only as long as the event.
+            if (event.drop.data != nullptr)
+            {
+                HYOSHI_LOG_INFO("Dropped '{}'", event.drop.data);
+                droppedFiles.emplace_back(event.drop.data);
+            }
+            break;
+
         case SDL_EVENT_WINDOW_RESIZED:
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
             isWindowResized = isWindowResized || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED;
@@ -443,6 +475,15 @@ void Platform::PumpEvents()
             break;
         }
     }
+
+#if defined(SDL_PLATFORM_EMSCRIPTEN)
+    // Written files reach the browser's storage only when copied there. Copy after each change
+    // rather than at exit, since a page that closes can't wait for the copy.
+    if (isStorageChanged.exchange(false) && StartStorageSync() == 0)
+    {
+        isStorageChanged = true;
+    }
+#endif
 }
 
 void Platform::WaitForEvents(int32_t timeoutMs)
@@ -462,6 +503,11 @@ bool Platform::ConsumeWindowResized()
     const bool wasResized = isWindowResized;
     isWindowResized = false;
     return wasResized;
+}
+
+std::vector<std::string> Platform::TakeDroppedFiles()
+{
+    return std::exchange(droppedFiles, {});
 }
 
 bool Platform::IsQuitRequested() const
@@ -517,6 +563,7 @@ Result<void> SaveFile(const std::string& path, std::span<const std::byte> conten
         SDL_RemovePath(temporary.c_str());
         return Error{"Could not replace '" + path + "': " + error};
     }
+    isStorageChanged = true;
     return {};
 }
 
@@ -526,6 +573,7 @@ Result<void> MakeDirectory(const std::string& path)
     {
         return Error{"Could not create '" + path + "': " + SDL_GetError()};
     }
+    isStorageChanged = true;
     return {};
 }
 

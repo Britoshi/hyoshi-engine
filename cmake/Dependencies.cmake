@@ -131,6 +131,20 @@ target_compile_definitions(hyoshi_miniaudio INTERFACE
     MA_NO_ENGINE MA_NO_NODE_GRAPH MA_NO_RESOURCE_MANAGER MA_NO_GENERATION MA_NO_ENCODING
 )
 
+# Zip archives: osu! map sets (.osz) dropped on the window are unpacked into a song folder.
+CPMAddPackage(
+    NAME miniz
+    SYSTEM YES
+    GITHUB_REPOSITORY richgel999/miniz
+    GIT_TAG 3.1.2
+    OPTIONS
+        "BUILD_EXAMPLES OFF"
+        "BUILD_FUZZERS OFF"
+        "BUILD_TESTS OFF"
+        "AMALGAMATE_SOURCES OFF"
+        "INSTALL_PROJECT OFF"
+)
+
 # JSON for source charts (.rchart.json) and settings.
 CPMAddPackage(
     NAME yyjson

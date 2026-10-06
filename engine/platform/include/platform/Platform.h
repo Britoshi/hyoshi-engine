@@ -122,6 +122,10 @@ public:
     // True once after the window's size in pixels changes.
     bool ConsumeWindowResized();
 
+    // Files dropped on the window since the last call. On the web, the browser's files are copied
+    // into memory first (SDL puts them under /tmp/filedrop/).
+    std::vector<std::string> TakeDroppedFiles();
+
     bool IsQuitRequested() const;
 
     // Ends the main loop as closing the window does.
@@ -184,6 +188,7 @@ private:
     bool isInitialized = false;
     bool isVulkanLoaded = false;
     bool isWindowResized = false;
+    std::vector<std::string> droppedFiles;
 };
 
 } // namespace hyoshi::platform

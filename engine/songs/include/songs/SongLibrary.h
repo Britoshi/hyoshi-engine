@@ -52,6 +52,17 @@ using ChartReader = std::optional<LibraryChart> (*)(const std::string& path);
 std::optional<LibraryChart> ReadManiaChart(const std::string& path);
 std::optional<LibraryChart> ReadCircleChart(const std::string& path);
 
+// What became of one archive given to SongLibrary::Import.
+struct ImportResult
+{
+    std::string Archive;
+    // The map folder it unpacked into; empty if it failed.
+    std::string Folder;
+    // The folder was already there, and was left alone.
+    bool WasAlreadyThere = false;
+    std::string Error;
+};
+
 struct LibraryOptions
 {
     ChartReader Reader = ReadManiaChart;
@@ -76,7 +87,19 @@ public:
     // Starts scanning the folders again.
     void Rescan();
 
-    // Once per frame: takes a finished scan.
+    // Unpacks osu! map sets (.osz) into their own folders in destination on a worker, then
+    // rescans; see UnpackOsz. Archives given while an import runs wait for it.
+    void Import(std::vector<std::string> archives, std::string destination);
+
+    bool IsImporting() const
+    {
+        return pendingImport.valid() || !queuedArchives.empty();
+    }
+
+    // The results of finished imports, once each.
+    std::vector<ImportResult> TakeImportResults();
+
+    // Once per frame: takes a finished scan or import.
     void Update();
 
     bool IsScanning() const
@@ -105,6 +128,10 @@ private:
     std::vector<std::string> folders;
     std::vector<LibrarySong> songs;
     std::future<std::vector<LibrarySong>> pendingScan;
+    std::future<std::vector<ImportResult>> pendingImport;
+    std::vector<std::string> queuedArchives;
+    std::string queuedDestination;
+    std::vector<ImportResult> importResults;
     uint32_t version = 0;
 };
 
