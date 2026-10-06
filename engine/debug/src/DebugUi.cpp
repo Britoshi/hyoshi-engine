@@ -139,8 +139,17 @@ void DebugUi::Shutdown()
     isInitialized = false;
 }
 
-void DebugUi::BeginFrame()
+void DebugUi::BeginFrame(bool hasWindows)
 {
+    ImGuiIO& io = ImGui::GetIO();
+    if (hasWindows)
+    {
+        io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+    }
+    else
+    {
+        io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+    }
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
 }

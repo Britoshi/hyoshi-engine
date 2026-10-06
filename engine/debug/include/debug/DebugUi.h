@@ -33,8 +33,9 @@ public:
     Result<void> Initialize(rhi::IRenderDevice& device, platform::Platform& platform, const DebugUiConfig& config = {});
     void Shutdown();
 
-    // Starts an ImGui frame. Build windows with ImGui:: calls between this and Render.
-    void BeginFrame();
+    // Starts an ImGui frame. Build windows with ImGui:: calls between this and Render. ImGui sets
+    // the system cursor (showing it, or a resize arrow) only while it has windows showing.
+    void BeginFrame(bool hasWindows);
 
     // Draws the frame's UI. Call inside a render pass.
     void Render(rhi::ICommandList& commands);

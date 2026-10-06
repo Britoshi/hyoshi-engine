@@ -300,8 +300,12 @@ int Application::Run()
         Update(frameSeconds);
 
         // ImGui runs every frame so its input doesn't pile up; windows show only with F1, or always
-        // in the editor.
-        debugUi.BeginFrame();
+        // in the editor, and the system cursor is theirs while they do.
+        debugUi.BeginFrame(HasImGuiWindows());
+        if (!HasImGuiWindows())
+        {
+            platform.ApplyCursor();
+        }
         if (editorLayer != nullptr && services)
         {
             editorLayer->Build();
@@ -557,8 +561,7 @@ void Application::StartFirstScene()
 void Application::RunScene(HostTimeNs now, float deltaSeconds)
 {
     const glm::vec2 canvas = camera.GetVirtualSize();
-    // The editor's windows are always there; the debug overlay's only while it shows.
-    const bool hasImGuiWindows = isDebugVisible || editorLayer != nullptr;
+    const bool hasImGuiWindows = HasImGuiWindows();
     const bool isKeyboardCaptured = hasImGuiWindows && debugUi.WantsKeyboard();
     const bool isPointerCaptured = hasImGuiWindows && debugUi.WantsPointer();
     const hyoshi::platform::NormalizedRect safe = platform.GetSafeArea();
@@ -582,6 +585,7 @@ void Application::RunScene(HostTimeNs now, float deltaSeconds)
     frame.DeltaSeconds = deltaSeconds;
     frame.IsKeyboardCaptured = isKeyboardCaptured;
     scene->RunFrame(frame, *ui);
+    game.DrawOverlay(frame, *ui);
     if (std::unique_ptr<Scene> next = scene->TakeNextScene())
     {
         endedScene = EndScene();

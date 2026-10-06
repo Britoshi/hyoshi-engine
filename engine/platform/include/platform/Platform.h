@@ -144,8 +144,24 @@ public:
 
     // Hides the pointer and keeps it in the window while the window has focus, for aiming with
     // something else (a trackpad's positions on the pad). Pointer events still arrive, but their
-    // positions stop moving. Desktop only; unlocking shows the pointer again.
+    // positions stop moving. Desktop only; unlocking shows the pointer again, unless
+    // SetCursorHidden hid it.
     void SetPointerLocked(bool isLocked);
+    bool IsPointerLocked() const;
+
+    // Hides the system's mouse cursor, for a game that draws its own (on the web too), from the
+    // next ApplyCursor.
+    void SetCursorHidden(bool isHidden)
+    {
+        isCursorHidden = isHidden;
+    }
+
+    // Shows or hides the system cursor as SetCursorHidden asked. The Application calls it every
+    // frame, except while the debug UI's windows show: they need the system's cursor.
+    void ApplyCursor();
+
+    // The mouse is over the window, so a cursor drawn by the game belongs there.
+    bool IsPointerOverWindow() const;
 
     // Writable per-user directory for settings and caches, ending in a path separator.
     const std::string& GetUserDataPath() const;
@@ -188,6 +204,7 @@ private:
     bool isInitialized = false;
     bool isVulkanLoaded = false;
     bool isWindowResized = false;
+    bool isCursorHidden = false;
     std::vector<std::string> droppedFiles;
 };
 

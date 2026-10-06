@@ -612,6 +612,29 @@ void Platform::SetPointerLocked(bool isLocked)
     }
 }
 
+bool Platform::IsPointerLocked() const
+{
+    return window != nullptr && SDL_GetWindowRelativeMouseMode(window);
+}
+
+void Platform::ApplyCursor()
+{
+    // Against SDL's own state, since the debug UI may have shown the cursor meanwhile.
+    if (window == nullptr || SDL_CursorVisible() != isCursorHidden)
+    {
+        return;
+    }
+    if (!(isCursorHidden ? SDL_HideCursor() : SDL_ShowCursor()))
+    {
+        HYOSHI_LOG_WARN("Couldn't {} the cursor: {}", isCursorHidden ? "hide" : "show", SDL_GetError());
+    }
+}
+
+bool Platform::IsPointerOverWindow() const
+{
+    return window != nullptr && SDL_GetMouseFocus() == window;
+}
+
 const std::string& Platform::GetUserDataPath() const
 {
     return userDataPath;

@@ -79,6 +79,8 @@ constexpr int32_t HUD = 20;
 constexpr int32_t PANEL = 30;
 constexpr int32_t MODAL = 40;
 constexpr int32_t FADE = 60;
+// Over everything, scene fades included.
+constexpr int32_t CURSOR = 70;
 } // namespace layers
 
 namespace colors
