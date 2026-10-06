@@ -31,18 +31,25 @@ void SongPlayer::Load(std::string songName, Loader loader, bool playWhenLoaded)
     pendingMusic = jobs.Submit([loader = std::move(loader), rate] { return loader(rate); });
 }
 
-void SongPlayer::LoadFile(const std::string& path, bool playWhenLoaded)
+void SongPlayer::LoadFile(const std::string& path, bool playWhenLoaded, SongTimeUs leadInUs)
 {
     Load(
         path,
-        [path](uint32_t rate) -> hyoshi::Result<hyoshi::audio::PcmBuffer>
+        [path, leadInUs](uint32_t rate) -> hyoshi::Result<hyoshi::audio::PcmBuffer>
         {
             hyoshi::Result<std::vector<std::byte>> bytes = hyoshi::platform::LoadFile(path);
             if (!bytes)
             {
                 return bytes.GetError();
             }
-            return hyoshi::audio::DecodeAudio(bytes.Value(), rate);
+            hyoshi::Result<hyoshi::audio::PcmBuffer> music = hyoshi::audio::DecodeAudio(bytes.Value(), rate);
+            if (music && leadInUs > 0)
+            {
+                std::vector<int16_t>& samples = music.Value().Samples;
+                const auto frames = static_cast<size_t>(hyoshi::UsToFrames(leadInUs, rate));
+                samples.insert(samples.begin(), frames * hyoshi::audio::PcmBuffer::CHANNELS, int16_t{0});
+            }
+            return music;
         },
         playWhenLoaded);
 }

@@ -24,8 +24,8 @@ public:
 
     // Runs the loader on a worker. The music plays as soon as it's ready if playWhenLoaded.
     void Load(std::string name, Loader loader, bool playWhenLoaded = true);
-    // Decodes an audio file.
-    void LoadFile(const std::string& path, bool playWhenLoaded = true);
+    // Decodes an audio file, with leadInUs of silence before it (time to see the first note coming).
+    void LoadFile(const std::string& path, bool playWhenLoaded = true, hyoshi::SongTimeUs leadInUs = 0);
 
     // Once per frame: finishes loading, follows route changes, updates the clock.
     void Update(hyoshi::HostTimeNs now);
