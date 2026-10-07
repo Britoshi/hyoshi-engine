@@ -12,8 +12,9 @@
 #include <emscripten/em_js.h>
 
 // Copies the user data folder, an IndexedDB mount (platforms/web/pre.js), to the browser's storage.
-// Returns 0 while an earlier copy is still running. The body is JavaScript, which clang-format
-// would break.
+// Returns 0 while an earlier copy is still running. A copy can fail when a worker replaces a file
+// it's reading (SaveFile renames), so a failed one is marked to be tried again
+// (TakeStorageRetry). The bodies are JavaScript, which clang-format would break.
 // clang-format off
 EM_JS(int, StartStorageSync, (), {
     if (!Module["hyoshiStorageMounted"]) return 1;
@@ -21,9 +22,42 @@ EM_JS(int, StartStorageSync, (), {
     Module["hyoshiStorageSyncing"] = true;
     FS.syncfs(false, (error) => {
         Module["hyoshiStorageSyncing"] = false;
-        if (error) console.warn("Could not save to browser storage:", error);
+        if (error) {
+            Module["hyoshiStorageRetry"] = true;
+            console.warn("Could not save to browser storage, trying again:", error.code ?? error);
+        }
     });
     return 1;
+});
+
+EM_JS(int, TakeStorageRetry, (), {
+    const retry = Module["hyoshiStorageRetry"] === true;
+    Module["hyoshiStorageRetry"] = false;
+    return retry ? 1 : 0;
+});
+
+// One hidden file input, kept on Module, cleared before each pick so the same file can be chosen
+// again. The files chosen with it go through SDL's drop handler on the canvas, as files dropped
+// there do.
+EM_JS(void, OpenFilePicker, (const char* accept), {
+    let input = Module["hyoshiFilePicker"];
+    if (!input) {
+        input = document.createElement("input");
+        input.type = "file";
+        input.multiple = true;
+        input.style.display = "none";
+        document.body.appendChild(input);
+        input.addEventListener("change", () => {
+            if (input.files.length === 0) return;
+            const transfer = new DataTransfer();
+            for (const file of input.files) transfer.items.add(file);
+            Module["canvas"].dispatchEvent(new DragEvent("drop", {dataTransfer: transfer, bubbles: true, cancelable: true}));
+        });
+        Module["hyoshiFilePicker"] = input;
+    }
+    input.accept = UTF8ToString(accept);
+    input.value = "";
+    input.click();
 });
 // clang-format on
 #endif
@@ -479,7 +513,8 @@ void Platform::PumpEvents()
 #if defined(SDL_PLATFORM_EMSCRIPTEN)
     // Written files reach the browser's storage only when copied there. Copy after each change
     // rather than at exit, since a page that closes can't wait for the copy.
-    if (isStorageChanged.exchange(false) && StartStorageSync() == 0)
+    const bool isRetry = TakeStorageRetry() != 0;
+    if ((isStorageChanged.exchange(false) || isRetry) && StartStorageSync() == 0)
     {
         isStorageChanged = true;
     }
@@ -508,6 +543,16 @@ bool Platform::ConsumeWindowResized()
 std::vector<std::string> Platform::TakeDroppedFiles()
 {
     return std::exchange(droppedFiles, {});
+}
+
+bool Platform::BrowseForFiles([[maybe_unused]] const std::string& accept)
+{
+#if defined(SDL_PLATFORM_EMSCRIPTEN)
+    OpenFilePicker(accept.c_str());
+    return true;
+#else
+    return false;
+#endif
 }
 
 bool Platform::IsQuitRequested() const

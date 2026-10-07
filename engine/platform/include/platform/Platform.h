@@ -122,9 +122,15 @@ public:
     // True once after the window's size in pixels changes.
     bool ConsumeWindowResized();
 
-    // Files dropped on the window since the last call. On the web, the browser's files are copied
-    // into memory first (SDL puts them under /tmp/filedrop/).
+    // Files dropped on the window, or chosen with BrowseForFiles, since the last call. On the web,
+    // the browser's files are copied into memory first (SDL puts them under /tmp/filedrop/).
     std::vector<std::string> TakeDroppedFiles();
+
+    // Opens the browser's file picker, showing files that match accept (".osz"); the ones the
+    // player chooses arrive with TakeDroppedFiles, as if dropped on the window. Call it from a
+    // click or key press, since browsers open pickers only for those. Web only for now: elsewhere it
+    // returns false (SDL_ShowOpenFileDialog could do it on desktops).
+    bool BrowseForFiles(const std::string& accept);
 
     bool IsQuitRequested() const;
 
