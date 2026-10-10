@@ -58,13 +58,39 @@
             "displayName": "Windows x64 Release (MSVC)",
             "inherits": "windows-base",
             "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+        },
+        {
+            "name": "web-base",
+            "hidden": true,
+            "inherits": "base",
+            "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+            "cacheVariables": {
+                "CMAKE_C_FLAGS": "-pthread",
+                "CMAKE_CXX_FLAGS": "-pthread",
+                "CMAKE_EXE_LINKER_FLAGS": "-pthread",
+                "HYOSHI_BUILD_TESTS": "OFF"
+            }
+        },
+        {
+            "name": "web-debug",
+            "displayName": "Web Debug (Emscripten; source emsdk_env.sh first)",
+            "inherits": "web-base",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+        },
+        {
+            "name": "web-release",
+            "displayName": "Web Release (Emscripten; source emsdk_env.sh first)",
+            "inherits": "web-base",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
         }
     ],
     "buildPresets": [
         { "name": "macos-debug", "configurePreset": "macos-debug" },
         { "name": "macos-release", "configurePreset": "macos-release" },
         { "name": "windows-debug", "configurePreset": "windows-debug" },
-        { "name": "windows-release", "configurePreset": "windows-release" }
+        { "name": "windows-release", "configurePreset": "windows-release" },
+        { "name": "web-debug", "configurePreset": "web-debug" },
+        { "name": "web-release", "configurePreset": "web-release" }
     ],
     "testPresets": [
         {

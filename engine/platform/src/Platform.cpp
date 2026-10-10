@@ -8,6 +8,59 @@
 #if defined(SDL_PLATFORM_ANDROID)
 #include <jni.h>
 #endif
+#if defined(SDL_PLATFORM_EMSCRIPTEN)
+#include <emscripten/em_js.h>
+
+// Copies the user data folder, an IndexedDB mount (platforms/web/pre.js), to the browser's storage.
+// Returns 0 while an earlier copy is still running. A copy can fail when a worker replaces a file
+// it's reading (SaveFile renames), so a failed one is marked to be tried again
+// (TakeStorageRetry). The bodies are JavaScript, which clang-format would break.
+// clang-format off
+EM_JS(int, StartStorageSync, (), {
+    if (!Module["hyoshiStorageMounted"]) return 1;
+    if (Module["hyoshiStorageSyncing"]) return 0;
+    Module["hyoshiStorageSyncing"] = true;
+    FS.syncfs(false, (error) => {
+        Module["hyoshiStorageSyncing"] = false;
+        if (error) {
+            Module["hyoshiStorageRetry"] = true;
+            console.warn("Could not save to browser storage, trying again:", error.code ?? error);
+        }
+    });
+    return 1;
+});
+
+EM_JS(int, TakeStorageRetry, (), {
+    const retry = Module["hyoshiStorageRetry"] === true;
+    Module["hyoshiStorageRetry"] = false;
+    return retry ? 1 : 0;
+});
+
+// One hidden file input, kept on Module, cleared before each pick so the same file can be chosen
+// again. The files chosen with it go through SDL's drop handler on the canvas, as files dropped
+// there do.
+EM_JS(void, OpenFilePicker, (const char* accept), {
+    let input = Module["hyoshiFilePicker"];
+    if (!input) {
+        input = document.createElement("input");
+        input.type = "file";
+        input.multiple = true;
+        input.style.display = "none";
+        document.body.appendChild(input);
+        input.addEventListener("change", () => {
+            if (input.files.length === 0) return;
+            const transfer = new DataTransfer();
+            for (const file of input.files) transfer.items.add(file);
+            Module["canvas"].dispatchEvent(new DragEvent("drop", {dataTransfer: transfer, bubbles: true, cancelable: true}));
+        });
+        Module["hyoshiFilePicker"] = input;
+    }
+    input.accept = UTF8ToString(accept);
+    input.value = "";
+    input.click();
+});
+// clang-format on
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -28,6 +81,10 @@ struct LifecycleState
 
 namespace
 {
+
+// Set when SaveFile or MakeDirectory changes a file, from any thread. The web build copies the
+// changes to the browser's storage once a frame.
+std::atomic<bool> isStorageChanged = false;
 
 bool ToLifecycleEvent(Uint32 type, LifecycleEvent& outEvent)
 {
@@ -188,6 +245,9 @@ Result<void> Platform::Initialize(const PlatformConfig& config)
     // Immersive: the status and navigation bars hide until swiped in. Layouts keep to the safe
     // area, clear of cutouts.
     windowFlags |= SDL_WINDOW_FULLSCREEN;
+#elif defined(SDL_PLATFORM_EMSCRIPTEN)
+    // The canvas fills the page and follows the browser window's size.
+    windowFlags |= SDL_WINDOW_FILL_DOCUMENT;
 #endif
     if (config.EnableVulkan)
     {
@@ -308,6 +368,15 @@ void Platform::PumpEvents()
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             HYOSHI_LOG_INFO("Quit requested");
             lifecycle->IsQuitRequested = true;
+            break;
+
+        case SDL_EVENT_DROP_FILE:
+            // The path lives only as long as the event.
+            if (event.drop.data != nullptr)
+            {
+                HYOSHI_LOG_INFO("Dropped '{}'", event.drop.data);
+                droppedFiles.emplace_back(event.drop.data);
+            }
             break;
 
         case SDL_EVENT_WINDOW_RESIZED:
@@ -440,6 +509,16 @@ void Platform::PumpEvents()
             break;
         }
     }
+
+#if defined(SDL_PLATFORM_EMSCRIPTEN)
+    // Written files reach the browser's storage only when copied there. Copy after each change
+    // rather than at exit, since a page that closes can't wait for the copy.
+    const bool isRetry = TakeStorageRetry() != 0;
+    if ((isStorageChanged.exchange(false) || isRetry) && StartStorageSync() == 0)
+    {
+        isStorageChanged = true;
+    }
+#endif
 }
 
 void Platform::WaitForEvents(int32_t timeoutMs)
@@ -459,6 +538,21 @@ bool Platform::ConsumeWindowResized()
     const bool wasResized = isWindowResized;
     isWindowResized = false;
     return wasResized;
+}
+
+std::vector<std::string> Platform::TakeDroppedFiles()
+{
+    return std::exchange(droppedFiles, {});
+}
+
+bool Platform::BrowseForFiles([[maybe_unused]] const std::string& accept)
+{
+#if defined(SDL_PLATFORM_EMSCRIPTEN)
+    OpenFilePicker(accept.c_str());
+    return true;
+#else
+    return false;
+#endif
 }
 
 bool Platform::IsQuitRequested() const
@@ -514,6 +608,7 @@ Result<void> SaveFile(const std::string& path, std::span<const std::byte> conten
         SDL_RemovePath(temporary.c_str());
         return Error{"Could not replace '" + path + "': " + error};
     }
+    isStorageChanged = true;
     return {};
 }
 
@@ -523,6 +618,7 @@ Result<void> MakeDirectory(const std::string& path)
     {
         return Error{"Could not create '" + path + "': " + SDL_GetError()};
     }
+    isStorageChanged = true;
     return {};
 }
 
@@ -587,6 +683,29 @@ void Platform::SetPointerLocked(bool isLocked)
     {
         HYOSHI_LOG_WARN("Couldn't {} the pointer: {}", isLocked ? "lock" : "unlock", SDL_GetError());
     }
+}
+
+bool Platform::IsPointerLocked() const
+{
+    return window != nullptr && SDL_GetWindowRelativeMouseMode(window);
+}
+
+void Platform::ApplyCursor()
+{
+    // Against SDL's own state, since the debug UI may have shown the cursor meanwhile.
+    if (window == nullptr || SDL_CursorVisible() != isCursorHidden)
+    {
+        return;
+    }
+    if (!(isCursorHidden ? SDL_HideCursor() : SDL_ShowCursor()))
+    {
+        HYOSHI_LOG_WARN("Couldn't {} the cursor: {}", isCursorHidden ? "hide" : "show", SDL_GetError());
+    }
+}
+
+bool Platform::IsPointerOverWindow() const
+{
+    return window != nullptr && SDL_GetMouseFocus() == window;
 }
 
 const std::string& Platform::GetUserDataPath() const

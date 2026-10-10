@@ -23,7 +23,10 @@ The version of each library the build pins (the latest release as of 2026-09-24)
 | Dear ImGui | `v1.92.9b` | M2 | https://github.com/ocornut/imgui |
 | miniaudio (with stb_vorbis from the pinned stb) | `0.11.25` | M3 | https://github.com/mackron/miniaudio |
 | yyjson | `0.13.0` | M4 | https://github.com/ibireme/yyjson |
+| miniz | `3.1.2` | `.osz` import (map sets dropped on the window) | https://github.com/richgel999/miniz |
 | Noto Sans JP (static OTF subsets, Regular and Bold; SIL Open Font License 1.1) | noto-cjk `Sans2.004` | M4 (game UI) | https://github.com/notofonts/noto-cjk |
+
+Web builds use Emscripten `6.0.11` (emsdk), whose built-in port pins emdawnwebgpu `v20260423.175430` for `webgpu.h`.
 
 On the macOS development host, the Vulkan runtime comes from Homebrew: vulkan-loader 1.4.357, MoltenVK 1.4.2, and vulkan-validationlayers 1.4.357.
 

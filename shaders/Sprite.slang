@@ -8,7 +8,12 @@ struct DrawConstants
     float2 rotation; // cos, sin of the swapchain pre-rotation
 };
 
+// WebGPU has no push constants: web builds read them from a uniform buffer (engine/rhi/webgpu).
+#if defined(HYOSHI_WGSL)
+[[vk::binding(0, 1)]]
+#else
 [[vk::push_constant]]
+#endif
 ConstantBuffer<DrawConstants> constants;
 
 [[vk::binding(0, 0)]]
@@ -54,6 +59,10 @@ VertexOutput vertexMain(SpriteInstance instance, uint vertexId: SV_VulkanVertexI
 
     VertexOutput output;
     output.position = float4(ToClip(instance.center + rotated), 0.0, 1.0);
+#if defined(HYOSHI_WGSL)
+    // Clip space y points up in WebGPU, down in Vulkan.
+    output.position.y = -output.position.y;
+#endif
     output.uv = lerp(instance.uvRect.xy, instance.uvRect.zw, corner);
     output.color = instance.color;
     output.flags = instance.flags;
@@ -64,11 +73,13 @@ VertexOutput vertexMain(SpriteInstance instance, uint vertexId: SV_VulkanVertexI
 float4 fragmentMain(VertexOutput input) : SV_Target
 {
     float4 texel = spriteTexture.Sample(input.uv);
+    // Derivatives are only defined in uniform control flow (WGSL rejects them in the branch), so
+    // the edge width is found for every pixel, distance field or not.
+    float distance = texel.a;
+    float width = max(fwidth(distance) * 0.7, 1.0e-4);
     if ((input.flags & DISTANCE_FIELD) != 0)
     {
         // The edge is at 0.5; smooth over about one screen pixel, whatever the scale.
-        float distance = texel.a;
-        float width = max(fwidth(distance) * 0.7, 1.0e-4);
         float coverage = smoothstep(0.5 - width, 0.5 + width, distance);
         return float4(input.color.rgb, input.color.a * coverage);
     }

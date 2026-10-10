@@ -1,15 +1,18 @@
-# hyoshi_add_app(<target> OUTPUT_NAME <name> SOURCES <file>... [ASSETS <folder>...] [WINDOWS_RC <file>])
+# hyoshi_add_app(<target> OUTPUT_NAME <name> SOURCES <file>... [ASSETS <folder>...] [WINDOWS_RC <file>]
+#                [WEB_PRELOAD <src@dst>...])
 #
 # A game (or sample) built on the engine: an executable on desktops, and on Android the shared
 # library SDL's activity loads (libmain.so). It links every engine module (hyoshi::engine).
 #
 # Files the app loads at run time go next to the executable, or on Android into
-# HYOSHI_ANDROID_ASSETS_DIR, where Gradle packs them as APK assets:
+# HYOSHI_ANDROID_ASSETS_DIR, where Gradle packs them as APK assets, or on the web into the
+# preloaded file system (<name>.data, see hyoshi_configure_web_app):
 # - the engine's own under engine/: its fonts (engine/fonts) and logos (engine/textures);
 # - each ASSETS folder under its own name: ASSETS content/textures installs as textures/.
-# WINDOWS_RC adds a resource script (the executable's icon) on Windows.
+# WINDOWS_RC adds a resource script (the executable's icon) on Windows. WEB_PRELOAD adds files to
+# the web build's file system (hyoshi_configure_web_app's PRELOAD).
 function(hyoshi_add_app target)
-    cmake_parse_arguments(PARSE_ARGV 1 APP "" "OUTPUT_NAME;WINDOWS_RC" "SOURCES;ASSETS")
+    cmake_parse_arguments(PARSE_ARGV 1 APP "" "OUTPUT_NAME;WINDOWS_RC" "SOURCES;ASSETS;WEB_PRELOAD")
     if(NOT APP_OUTPUT_NAME)
         set(APP_OUTPUT_NAME ${target})
     endif()
@@ -22,6 +25,14 @@ function(hyoshi_add_app target)
             set(HYOSHI_ANDROID_ASSETS_DIR ${CMAKE_BINARY_DIR}/assets)
         endif()
         set(assetDir ${HYOSHI_ANDROID_ASSETS_DIR})
+    elseif(EMSCRIPTEN)
+        add_executable(${target} ${APP_SOURCES})
+        set_target_properties(${target} PROPERTIES OUTPUT_NAME ${APP_OUTPUT_NAME})
+        target_link_libraries(${target} PRIVATE hyoshi::engine)
+        hyoshi_set_warnings(${target})
+        hyoshi_configure_web_app(${target} OUTPUT_NAME ${APP_OUTPUT_NAME} ASSETS ${APP_ASSETS}
+            PRELOAD ${APP_WEB_PRELOAD})
+        return()
     else()
         add_executable(${target} ${APP_SOURCES})
         set_target_properties(${target} PROPERTIES OUTPUT_NAME ${APP_OUTPUT_NAME})
@@ -53,9 +64,9 @@ endfunction()
 # hyoshi_add_editor(<target> [OUTPUT_NAME <name>] SOURCES <file>... [ASSETS <folder>...] [WINDOWS_RC <file>])
 # A game's editor (ADR 0002): an app like hyoshi_add_app's that also links the editor framework.
 # Its sources hold a main that calls hyoshi::editor::Run, and the game's editor::Editor. Desktop
-# only: on Android this does nothing.
+# only: on Android and the web this does nothing.
 function(hyoshi_add_editor target)
-    if(ANDROID)
+    if(ANDROID OR EMSCRIPTEN)
         return()
     endif()
     hyoshi_add_app(${target} ${ARGN})

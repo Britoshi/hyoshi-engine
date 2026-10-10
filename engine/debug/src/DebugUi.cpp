@@ -1,6 +1,10 @@
 #include "debug/DebugUi.h"
 
+#if defined(__EMSCRIPTEN__)
+#include "DebugUi.wgsl.h"
+#else
 #include "DebugUi.spv.h"
+#endif
 
 #include "core/Log.h"
 #include "platform/Platform.h"
@@ -71,7 +75,11 @@ Result<void> DebugUi::Initialize(rhi::IRenderDevice& renderDevice, platform::Pla
     platform->SetEventHook([](const SDL_Event& event) { ImGui_ImplSDL3_ProcessEvent(&event); });
 
     rhi::PipelineDesc pipelineDesc;
+#if defined(__EMSCRIPTEN__)
+    pipelineDesc.Wgsl = DEBUG_UI_WGSL;
+#else
     pipelineDesc.Spirv = DEBUG_UI_SPIRV;
+#endif
     pipelineDesc.Blend = rhi::BlendMode::Alpha;
     pipelineDesc.PushConstantSize = sizeof(renderer::ClipTransform);
     pipelineDesc.TextureCount = 1;
@@ -131,8 +139,17 @@ void DebugUi::Shutdown()
     isInitialized = false;
 }
 
-void DebugUi::BeginFrame()
+void DebugUi::BeginFrame(bool hasWindows)
 {
+    ImGuiIO& io = ImGui::GetIO();
+    if (hasWindows)
+    {
+        io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+    }
+    else
+    {
+        io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+    }
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
 }

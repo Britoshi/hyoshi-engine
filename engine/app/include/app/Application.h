@@ -69,6 +69,12 @@ public:
     {
     }
 
+    // Every frame, after the scene ran: what goes over every scene, such as a cursor drawn in
+    // place of the system's (on ui::layers::CURSOR).
+    virtual void DrawOverlay([[maybe_unused]] const FrameContext& frame, [[maybe_unused]] ui::Ui& ui)
+    {
+    }
+
     // The app is going into the background, where Android may end it, or is closing: save.
     virtual void Save()
     {
@@ -139,6 +145,11 @@ private:
     // if the event is used up, so the scene doesn't see it.
     bool TakeShortcut(const input::InputEvent& event);
     void RunScene(HostTimeNs now, float deltaSeconds);
+    // The editor's windows are always there; the debug overlay's only while it shows.
+    bool HasImGuiWindows() const
+    {
+        return isDebugVisible || editorLayer != nullptr;
+    }
     // Ends the current scene, keeping what the exit checks need, and hands it back to be destroyed
     // once nothing refers to it.
     std::unique_ptr<Scene> EndScene();

@@ -13,6 +13,7 @@ add_executable(hyoshi_unit_tests
     MusicStreamTests.cpp
     OffsetCalibrationTests.cpp
     OsuImportTests.cpp
+    OszTests.cpp
     ResultTests.cpp
     SongClockTests.cpp
     SongLibraryTests.cpp
@@ -22,7 +23,7 @@ add_executable(hyoshi_unit_tests
 )
 
 target_link_libraries(hyoshi_unit_tests PRIVATE hyoshi::core hyoshi::input hyoshi::renderer hyoshi::audio hyoshi::rhythm hyoshi::mania hyoshi::circle hyoshi::osu_import hyoshi::songs hyoshi::ui
-    doctest::doctest hyoshi_stb)
+    doctest::doctest hyoshi_stb miniz)
 list(GET HYOSHI_FONT_FILES 0 testFont)
 target_compile_definitions(hyoshi_unit_tests PRIVATE HYOSHI_REPLAY_DIR="${PROJECT_SOURCE_DIR}/tests/replays"
     HYOSHI_TEST_FONT="${testFont}")

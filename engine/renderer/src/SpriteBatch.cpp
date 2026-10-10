@@ -1,6 +1,10 @@
 #include "renderer/SpriteBatch.h"
 
+#if defined(__EMSCRIPTEN__)
+#include "Sprite.wgsl.h"
+#else
 #include "Sprite.spv.h"
+#endif
 
 #include "core/Log.h"
 
@@ -35,7 +39,11 @@ Result<void> SpriteBatch::Initialize(rhi::IRenderDevice& renderDevice)
     device = &renderDevice;
 
     rhi::PipelineDesc pipelineDesc;
+#if defined(__EMSCRIPTEN__)
+    pipelineDesc.Wgsl = SPRITE_WGSL;
+#else
     pipelineDesc.Spirv = SPRITE_SPIRV;
+#endif
     pipelineDesc.Topology = rhi::PrimitiveTopology::TriangleStrip;
     pipelineDesc.Blend = rhi::BlendMode::Alpha;
     pipelineDesc.PushConstantSize = sizeof(ClipTransform);

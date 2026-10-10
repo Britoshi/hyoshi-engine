@@ -1,6 +1,7 @@
 #include "songs/SongLibrary.h"
 
 #include "songs/Charts.h"
+#include "songs/Osz.h"
 
 #include "core/Log.h"
 #include "platform/Platform.h"
@@ -312,8 +313,66 @@ void SongLibrary::Rescan()
                               { return ScanSongFolders(scanFolders, scanOptions); });
 }
 
+void SongLibrary::Import(std::vector<std::string> archives, std::string destination)
+{
+    queuedArchives.insert(queuedArchives.end(), archives.begin(), archives.end());
+    queuedDestination = std::move(destination);
+    if (pendingImport.valid() || queuedArchives.empty())
+    {
+        return;
+    }
+    pendingImport = jobs.Submit(
+        [batch = std::exchange(queuedArchives, {}), folder = queuedDestination]
+        {
+            std::vector<ImportResult> results;
+            for (const std::string& archive : batch)
+            {
+                ImportResult& result = results.emplace_back();
+                result.Archive = archive;
+                if (Result<UnpackedOsz> unpacked = UnpackOsz(archive, folder))
+                {
+                    result.Folder = std::move(unpacked.Value().Folder);
+                    result.WasAlreadyThere = unpacked.Value().WasAlreadyThere;
+                }
+                else
+                {
+                    result.Error = unpacked.GetError().Message;
+                }
+            }
+            return results;
+        });
+}
+
+std::vector<ImportResult> SongLibrary::TakeImportResults()
+{
+    return std::exchange(importResults, {});
+}
+
 void SongLibrary::Update()
 {
+    if (hyoshi::IsReady(pendingImport))
+    {
+        for (ImportResult& result : pendingImport.get())
+        {
+            if (!result.Error.empty())
+            {
+                HYOSHI_LOG_WARN("Import failed: {}", result.Error);
+            }
+            else if (result.WasAlreadyThere)
+            {
+                HYOSHI_LOG_INFO("Not importing '{}': '{}' is already there", result.Archive, result.Folder);
+            }
+            else
+            {
+                HYOSHI_LOG_INFO("Imported '{}' into '{}'", result.Archive, result.Folder);
+            }
+            importResults.push_back(std::move(result));
+        }
+        Rescan();
+        // Archives dropped meanwhile.
+        Import({}, queuedDestination);
+    }
+
     if (!hyoshi::IsReady(pendingScan))
     {
         return;

@@ -122,6 +122,16 @@ public:
     // True once after the window's size in pixels changes.
     bool ConsumeWindowResized();
 
+    // Files dropped on the window, or chosen with BrowseForFiles, since the last call. On the web,
+    // the browser's files are copied into memory first (SDL puts them under /tmp/filedrop/).
+    std::vector<std::string> TakeDroppedFiles();
+
+    // Opens the browser's file picker, showing files that match accept (".osz"); the ones the
+    // player chooses arrive with TakeDroppedFiles, as if dropped on the window. Call it from a
+    // click or key press, since browsers open pickers only for those. Web only for now: elsewhere it
+    // returns false (SDL_ShowOpenFileDialog could do it on desktops).
+    bool BrowseForFiles(const std::string& accept);
+
     bool IsQuitRequested() const;
 
     // Ends the main loop as closing the window does.
@@ -149,8 +159,24 @@ public:
 
     // Hides the pointer and keeps it in the window while the window has focus, for aiming with
     // something else (a trackpad's positions on the pad). Pointer events still arrive, but their
-    // positions stop moving. Desktop only; unlocking shows the pointer again.
+    // positions stop moving. Desktop only; unlocking shows the pointer again, unless
+    // SetCursorHidden hid it.
     void SetPointerLocked(bool isLocked);
+    bool IsPointerLocked() const;
+
+    // Hides the system's mouse cursor, for a game that draws its own (on the web too), from the
+    // next ApplyCursor.
+    void SetCursorHidden(bool isHidden)
+    {
+        isCursorHidden = isHidden;
+    }
+
+    // Shows or hides the system cursor as SetCursorHidden asked. The Application calls it every
+    // frame, except while the debug UI's windows show: they need the system's cursor.
+    void ApplyCursor();
+
+    // The mouse is over the window, so a cursor drawn by the game belongs there.
+    bool IsPointerOverWindow() const;
 
     // Writable per-user directory for settings and caches, ending in a path separator.
     const std::string& GetUserDataPath() const;
@@ -193,6 +219,8 @@ private:
     bool isInitialized = false;
     bool isVulkanLoaded = false;
     bool isWindowResized = false;
+    bool isCursorHidden = false;
+    std::vector<std::string> droppedFiles;
 };
 
 } // namespace hyoshi::platform
