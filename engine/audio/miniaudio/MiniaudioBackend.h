@@ -36,6 +36,7 @@ public:
     void SetBusVolume(Bus bus, float volume) override;
 
     Result<int64_t> SetMusic(PcmBuffer pcm) override;
+    Result<int64_t> SetMusicStream(std::unique_ptr<MusicStream> stream) override;
     void PlayMusic() override;
     void PauseMusic() override;
     int64_t SeekMusic(DspFrame frame) override;
@@ -57,6 +58,7 @@ private:
     struct RetiredBuffer
     {
         std::unique_ptr<PcmBuffer> Buffer;
+        std::unique_ptr<MusicStream> Stream;
         // Freed once the audio thread has applied this many commands.
         int64_t RequiredCommands = 0;
     };
@@ -64,6 +66,7 @@ private:
     bool Submit(const AudioCommand& command);
     Result<void> CheckFormat(const PcmBuffer& pcm) const;
     void Retire(std::unique_ptr<PcmBuffer> buffer);
+    void RetireMusic();
     SoundHandle StartVoice(SoundId sound, Bus bus, DspFrame musicFrame, float volume);
 
     std::unique_ptr<ma_device> device;
@@ -73,7 +76,11 @@ private:
 
     // Main thread state.
     std::unordered_map<SoundId, std::unique_ptr<PcmBuffer>> sounds;
+    // At most one of these is set.
     std::unique_ptr<PcmBuffer> music;
+    std::unique_ptr<MusicStream> musicStream;
+    // The epoch of the stream's latest seek (MusicStream).
+    int64_t streamEpoch = 0;
     std::vector<RetiredBuffer> retiredBuffers;
     int64_t commandsSubmitted = 0;
     int64_t seekGeneration = 0;

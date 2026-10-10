@@ -365,7 +365,8 @@ void ClockDemo::BuildWindow()
         ImGui::Text("Voices %u active, %llu dropped, %llu late", stats.ActiveVoices,
                     static_cast<unsigned long long>(stats.DroppedVoices),
                     static_cast<unsigned long long>(stats.LateVoices));
-        ImGui::Text("Route changes %u", stats.RouteChanges);
+        ImGui::Text("Music underruns %llu, route changes %u", static_cast<unsigned long long>(stats.MusicUnderruns),
+                    stats.RouteChanges);
         if (ImGui::Button("Reset stats"))
         {
             audio.ResetStats();
@@ -383,9 +384,10 @@ void ClockDemo::LogSummary() const
     HYOSHI_LOG_INFO("Clock: song {:.3f} s, {} resyncs, {} backward steps, worst raw-filtered {:.2f} ms",
                     ToSeconds(clock.GetSongTime()), clock.GetResyncCount(), player.GetBackwardSteps(),
                     static_cast<double>(worstRawErrorMs));
-    HYOSHI_LOG_INFO("Audio: {} callbacks, longest gap {:.2f} ms, {} late and {} dropped voices, {} route changes",
+    HYOSHI_LOG_INFO("Audio: {} callbacks, longest gap {:.2f} ms, {} late and {} dropped voices, {} music underruns, "
+                    "{} route changes",
                     stats.Callbacks, static_cast<double>(stats.MaxCallbackGapNs) / 1.0e6, stats.LateVoices,
-                    stats.DroppedVoices, stats.RouteChanges);
+                    stats.DroppedVoices, stats.MusicUnderruns, stats.RouteChanges);
 }
 
 } // namespace hyoshi::app

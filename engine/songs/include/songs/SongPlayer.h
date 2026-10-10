@@ -1,13 +1,16 @@
 #pragma once
 
 #include "audio/IAudioBackend.h"
+#include "audio/MusicStream.h"
 #include "core/JobSystem.h"
 #include "core/Result.h"
 #include "rhythm/SongClock.h"
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <future>
+#include <memory>
 #include <string>
 
 namespace hyoshi::songs
@@ -22,10 +25,13 @@ public:
 
     SongPlayer(hyoshi::audio::IAudioBackend& audio, hyoshi::JobSystem& jobs);
 
-    // Runs the loader on a worker. The music plays as soon as it's ready if playWhenLoaded.
+    // Runs the loader on a worker and plays the PCM it returns, for music made in memory (the
+    // metronome track). The music plays as soon as it's ready if playWhenLoaded.
     void Load(std::string name, Loader loader, bool playWhenLoaded = true);
-    // Decodes an audio file.
-    void LoadFile(const std::string& path, bool playWhenLoaded = true);
+    // Streams an audio file: it's ready as soon as the file is read and its headers parsed, and
+    // it's decoded while it plays (MusicStream). leadInUs of silence come before it, as part of
+    // the music.
+    void LoadFile(const std::string& path, bool playWhenLoaded = true, hyoshi::SongTimeUs leadInUs = 0);
 
     // Once per frame: finishes loading, follows route changes, updates the clock.
     void Update(hyoshi::HostTimeNs now);
@@ -118,15 +124,19 @@ public:
     void OnResume();
 
 private:
-    void OnLoaded(hyoshi::audio::PcmBuffer music);
+    void OnLoaded(hyoshi::Result<int64_t> generation, hyoshi::DspFrame frameCount, uint32_t sampleRate);
 
     hyoshi::audio::IAudioBackend& audio;
     hyoshi::JobSystem& jobs;
     hyoshi::rhythm::SongClock clock;
+    // At most one is pending: a new load replaces the last.
     std::future<hyoshi::Result<hyoshi::audio::PcmBuffer>> pendingMusic;
+    std::future<hyoshi::Result<std::unique_ptr<hyoshi::audio::MusicStream>>> pendingStream;
 
     std::string name;
     std::string loadError;
+    // When the load began, for the log.
+    std::chrono::steady_clock::time_point loadStart;
     bool shouldPlayWhenLoaded = true;
     bool isLoaded = false;
     bool wasJustLoaded = false;

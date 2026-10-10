@@ -3,9 +3,11 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <vector>
 
 namespace
@@ -76,6 +78,55 @@ TEST_CASE("DecodeAudio rejects data that isn't audio")
 {
     const std::vector<std::byte> garbage(1000, std::byte{0x5A});
     CHECK_FALSE(hyoshi::audio::DecodeAudio(garbage, 48'000));
+}
+
+TEST_CASE("OpenStreamDecoder decodes a WAV file as DecodeAudio does, from any position")
+{
+    std::vector<int16_t> samples(10'007 * 2);
+    for (size_t i = 0; i < samples.size(); ++i)
+    {
+        samples[i] = static_cast<int16_t>((i * 37) % 30'000);
+    }
+    const std::vector<std::byte> wav = MakeWav(samples, 2, 48'000);
+    hyoshi::Result<hyoshi::audio::PcmBuffer> whole = hyoshi::audio::DecodeAudio(wav, 48'000);
+    REQUIRE(whole);
+
+    hyoshi::Result<std::unique_ptr<hyoshi::audio::IStreamDecoder>> opened =
+        hyoshi::audio::OpenStreamDecoder(wav, 48'000);
+    REQUIRE(opened);
+    hyoshi::audio::IStreamDecoder& decoder = *opened.Value();
+    CHECK(decoder.GetFrameCount() == whole.Value().GetFrameCount());
+    CHECK(decoder.HasExactSeeks());
+
+    std::vector<int16_t> streamed(samples.size());
+    CHECK(decoder.Read(streamed.data(), 4'000) == 4'000);
+    CHECK(decoder.Read(streamed.data() + (4'000 * 2), 20'000) == 6'007);
+    CHECK(streamed == whole.Value().Samples);
+    CHECK(decoder.Read(streamed.data(), 100) == 0);
+
+    REQUIRE(decoder.Seek(9'000));
+    std::vector<int16_t> tail(1'007 * 2);
+    CHECK(decoder.Read(tail.data(), 1'007) == 1'007);
+    CHECK(std::equal(tail.begin(), tail.end(), whole.Value().Samples.begin() + (9'000 * 2)));
+
+    REQUIRE(decoder.Seek(0));
+    CHECK(decoder.Skip(5'000) == 5'000);
+    CHECK(decoder.Read(tail.data(), 1'007) == 1'007);
+    CHECK(std::equal(tail.begin(), tail.end(), whole.Value().Samples.begin() + (5'000 * 2)));
+}
+
+TEST_CASE("OpenStreamDecoder knows a resampled file's length")
+{
+    const std::vector<std::byte> wav = MakeWav(std::vector<int16_t>(44'100, 0), 1, 44'100);
+    hyoshi::Result<std::unique_ptr<hyoshi::audio::IStreamDecoder>> opened =
+        hyoshi::audio::OpenStreamDecoder(wav, 48'000);
+    REQUIRE(opened);
+    CHECK(opened.Value()->GetFrameCount() == doctest::Approx(48'000).epsilon(0.001));
+}
+
+TEST_CASE("OpenStreamDecoder rejects data that isn't audio")
+{
+    CHECK_FALSE(hyoshi::audio::OpenStreamDecoder(std::vector<std::byte>(1000, std::byte{0x5A}), 48'000));
 }
 
 TEST_CASE("The metronome track has each click on its beat frame")

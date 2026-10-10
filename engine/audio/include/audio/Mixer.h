@@ -13,6 +13,8 @@
 namespace hyoshi::audio
 {
 
+class MusicStream;
+
 enum class AudioCommandType : uint8_t
 {
     SetMusic,
@@ -34,15 +36,21 @@ struct AudioCommand
     float Volume = 1.0f;
     // SeekMusic: the target. PlayVoice: the music frame to start at, or NOT_SCHEDULED.
     DspFrame Frame = 0;
+    // SetMusic: the music, either Buffer or Stream. PlayVoice, ReleaseBuffer: the sound.
     const PcmBuffer* Buffer = nullptr;
+    MusicStream* Stream = nullptr;
+    // SeekMusic on a stream: the epoch of the blocks decoded from the target (MusicStream).
+    int64_t StreamEpoch = 0;
 };
 
 // The engine's custom mixer (DESIGN.md section 11.2), independent of any device so it can run
 // offline in tests. The main thread submits commands; the audio thread calls Render, which
 // applies them, publishes the clock snapshot, and mixes music and voices.
 //
-// Render is real-time safe: no allocation, locks, logging, asserts, or file access. Buffers are
-// owned by the main thread, which keeps them alive until CommandsApplied shows they are released.
+// Render is real-time safe: no allocation, locks, logging, asserts, or file access. Buffers and
+// streams are owned by the main thread, which keeps them alive until CommandsApplied shows they are
+// released. Streamed music plays once its stream has decoded the blocks for the current position;
+// until then it holds where it is, and snapshots report it as not playing.
 class Mixer
 {
 public:
@@ -83,8 +91,10 @@ private:
 
     void Apply(const AudioCommand& command);
     void CancelScheduledVoices();
+    DspFrame GetMusicFrameCount() const;
+    DspFrame RenderMusic(float* output, DspFrame frameCount);
     float GetBusGain(Bus bus) const;
-    static void MixInto(float* output, const PcmBuffer& buffer, DspFrame sourceFrame, uint32_t frameCount, float gain);
+    static void MixInto(float* output, const int16_t* source, uint32_t frameCount, float gain);
 
     const uint32_t sampleRate;
     SpscQueue<AudioCommand> commands;
@@ -94,8 +104,11 @@ private:
     std::vector<Voice> voices;
     std::array<float, static_cast<size_t>(Bus::Count)> busVolumes{};
     const PcmBuffer* music = nullptr;
+    MusicStream* stream = nullptr;
     DspFrame musicCursor = 0;
     bool isMusicPlaying = false;
+    // The last callback advanced the music, with no seek, pause, or music change since.
+    bool wasMusicAdvancing = false;
     int64_t seekGeneration = 0;
     int64_t commandsApplied = 0;
     DspFrame deviceFrames = 0;
@@ -107,6 +120,7 @@ private:
     std::atomic<uint32_t> activeVoiceCount{0};
     std::atomic<uint64_t> droppedVoiceCount{0};
     std::atomic<uint64_t> lateVoiceCount{0};
+    std::atomic<uint64_t> musicUnderrunCount{0};
 
     // Main thread only.
     uint64_t droppedCommandCount = 0;

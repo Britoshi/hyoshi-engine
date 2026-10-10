@@ -14,9 +14,9 @@ Each module is a CMake target, `hyoshi::<module>`. `hyoshi::engine` links all of
 | `engine/rhi` | `IRenderDevice` and its Vulkan backend (volk, VMA; MoltenVK on macOS): swapchain with pre-rotation, pipeline cache, validation in debug builds |
 | `engine/renderer` | `Camera2D` (the short side of the screen is 1080 units), `SpriteBatch` (sprites can be distance fields; `KeepOrder` draws a layer in submission order), `TextRenderer` (distance-field glyphs generated at runtime from TTF/OTF, in atlas pages), `Image` (PNG/JPEG, distance fields from alpha, textures) |
 | `engine/debug` | The Dear ImGui overlay. Window positions are saved in `imgui.ini` in the user data folder, or `editor-imgui.ini` in the editor, with docking on. |
-| `engine/audio` | `IAudioBackend`, `Mixer` (runs in the audio callback), the miniaudio backend and decoder, `Synth` (clicks and a metronome track) |
+| `engine/audio` | `IAudioBackend`, `Mixer` (runs in the audio callback), `MusicStream` (music decoded ahead of playback on its own thread), the miniaudio backend and decoders, `Synth` (clicks and a metronome track) |
 | `engine/rhythm` | `SongClock`, the chart format (`ChartFile`), `ScrollMap`, `Judgment`, `ScoreSystem`, `OffsetCalibration` |
-| `engine/songs` | `Charts` (`ChartSource`, `GetChartKey`, a built-in 4-key chart on the metronome track, loading `.osu` and `.rchart.json` as Mania and `.osu` as Circle), `SongLibrary` (scans song folders on a worker thread with a mode's chart reader, from `LibraryOptions`), `SongPlayer` (music and the song clock) |
+| `engine/songs` | `Charts` (`ChartSource`, `GetChartKey`, a built-in 4-key chart on the metronome track, loading `.osu` and `.rchart.json` as Mania and `.osu` as Circle), `SongLibrary` (scans song folders on a worker thread with a mode's chart reader, from `LibraryOptions`), `SongPlayer` (streams a song's music and keeps the song clock in step with it) |
 | `engine/ui` | `Ui` (immediate-mode widgets, layout rectangles, colors, layers), `Logo` (images drawn as distance fields, scaled to fit) |
 | `engine/app` | `Application` (the main loop, scene switching with a fade, lifecycle, debug hooks, exit checks), `Game` (the interface a game implements), `EditorLayer` (the editor's hook into the main loop), `Scene`, `ClockDemo`, the splash screen |
 | `engine/editor` | Desktop only. `Editor` (the interface a game's editor implements), `Panel`, `EditorServices`, `Run`; the menu bar and dock space |
@@ -48,6 +48,10 @@ A game's editor is a second executable built from the same game code with `hyosh
 - calls the layer's `Initialize` after `Game::Initialize` (so the game's services exist), its `Build` every frame before the debug overlay's windows, and its `Shutdown` before `Game::Shutdown`.
 
 The layer draws the menu bar (File, View), a dock space over the window whose empty center passes input through to the game, and the game's panels. `AppConfig::WindowTitle` lets the editor's title differ from the game's while it shares the game's user data folder (`AppConfig::Name`). See [decision 0002](decisions/0002-editor-framework.md) for why it works this way.
+
+## How music is loaded
+
+`SongPlayer::LoadFile` reads the file and opens a `MusicStream` on a worker, which takes a few milliseconds: the stream reads the headers and knows the length. The stream's thread then decodes about 1.4 s ahead in fixed blocks, which pass to the audio thread and back through lock-free queues. A seek starts a new epoch: the mixer drops blocks decoded for the old position, and until the first block for the new one arrives, it holds the music and reports it as not playing, which the song clock treats as a pause. Seeks land on the frame that decoding from the start reaches; MP3s get there by decoding, since miniaudio's MP3 seeks miss by up to 26 ms (DESIGN.md section 11.2). Sounds, and music generated in memory (`SongPlayer::Load`), are decoded whole instead.
 
 ## How time flows
 

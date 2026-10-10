@@ -22,7 +22,7 @@ These work in any app built on the engine, for scripted runs and tests:
 | `HYOSHI_STRESS_AUDIO=1` | Stop the audio device for the last 200 ms of every 3 seconds |
 | `HYOSHI_STRESS_SEEK=1` | Clock demo: seek to a random position every 1.5 seconds |
 | `HYOSHI_SPRITES=10000` | Add bouncing sprites, for renderer stress tests |
-| `HYOSHI_MUSIC=song.ogg`, `HYOSHI_BPM=128`, `HYOSHI_FIRST_BEAT_MS=350` | Clock demo: play this file instead of the generated metronome track, at this tempo |
+| `HYOSHI_MUSIC=song.ogg`, `HYOSHI_BPM=128`, `HYOSHI_FIRST_BEAT_MS=350` | Clock demo: stream this file instead of the generated metronome track, at this tempo |
 
 On Windows, variables set in PowerShell (`$env:HYOSHI_SCENE = "clock"`) stay set for the rest of the session; clear one with `$env:HYOSHI_SCENE = $null`.
 
@@ -41,9 +41,13 @@ cmake --build --preset macos-debug --target tidy
 For changes to timing, audio, or rendering, also run the stress tests in the sample:
 
 ```sh
-# Clock stress: expect 0 resyncs (0 or 1 on Windows), 0 backward steps, and 0 late voices in the log
+# Clock stress: expect 0 resyncs (0 or 1 on Windows), 0 backward steps, 0 late voices, and 0 music underruns
 HYOSHI_SCENE=clock HYOSHI_STRESS_SEEK=1 HYOSHI_STRESS_AUDIO=1 HYOSHI_EXIT_AFTER_MS=12000 \
   ./build/macos-debug/samples/metronome/HyoshiMetronome
+
+# The same with streamed music: any song file, with HYOSHI_BPM for the clicks
+HYOSHI_SCENE=clock HYOSHI_MUSIC=song.mp3 HYOSHI_BPM=128 HYOSHI_STRESS_SEEK=1 HYOSHI_STRESS_AUDIO=1 \
+  HYOSHI_EXIT_AFTER_MS=12000 ./build/macos-debug/samples/metronome/HyoshiMetronome
 
 # Surface stress, with a screenshot
 HYOSHI_STRESS_SURFACE=1 HYOSHI_EXIT_AFTER_MS=12000 HYOSHI_SCREENSHOT=shot.png HYOSHI_SCREENSHOT_MS=5000 \
@@ -94,6 +98,7 @@ Environment variables don't reach Android apps, so there are no scripted runs on
 - **MSVC and Clang.** Each accepts code the other rejects. libc++ includes some standard headers transitively where MSVC's library doesn't, so include what you use. Clang rejects a forward declaration that collides with a using-declaration where MSVC accepts it. Build or run clang-tidy with both when you can.
 - **Sprite order within a layer.** `SpriteBatch` sorts each layer's sprites by texture, so sprites with different textures on the same layer draw in texture order, not call order. Put overlapping things on different layers, or call `KeepOrder(layer)` for that frame. Each texture change in a `KeepOrder` layer costs a draw call.
 - **Layers.** The app's fade uses `ui::layers::FADE` (60) in the same sprite batch, and the HUD uses 20, so a playfield must fit in the layers between. The circle playfield uses five.
+- **MP3 seeks.** miniaudio's MP3 seeks land up to 1,152 samples (26 ms) from where decoding from the start puts the same frame, so `MusicStream` seeks MP3s by decoding up to the target instead (`IStreamDecoder::HasExactSeeks`). Don't switch them back to `ma_decoder_seek_to_pcm_frame` without checking a seek against a full decode.
 - **Distance-field text.** `stbtt_GetGlyphSDF` ignores cubic curves, which breaks CFF fonts such as Noto Sans JP's `.otf`. `TextRenderer` computes the distance field itself from the flattened outline; don't switch back.
 - **Mac trackpads.** Mac trackpad fingers arrive as `TrackpadDown`, `TrackpadMove`, and `TrackpadUp` events, not touches. Their positions are on the pad (from NSTouch's normalized position, through SDL's `SDL_HINT_TRACKPAD_IS_TOUCH_ONLY`, set before `SDL_Init`), and the OS still moves the pointer from the same fingers. AppKit sends trackpad touches to the view under the pointer, so a game that aims with the trackpad locks the pointer in its window (`Platform::SetPointerLocked`). Windows touchpads only move the pointer.
 - **Windows key timestamps are coarse.** SDL stamps Windows key and mouse messages with `GetMessageTime`, which moves in steps of 15 to 16 ms. The likely fix is raw input (`WM_INPUT`) on a dedicated thread, stamped with `QueryPerformanceCounter` ([DESIGN.md section 12.3](DESIGN.md#123-timestamp-accuracy-verify-early)).
@@ -118,6 +123,7 @@ Environment variables don't reach Android apps, so there are no scripted runs on
 - A real Android phone: arm64, real touch, display cutouts, performance, AAudio's real latency, and background and foreground cycles.
 - Audio sync by ear.
 - FLAC decoding. WAV, MP3, and Ogg Vorbis are tested.
+- Streamed music on macOS and Android, how far ahead a slow phone needs to decode, and how long MP3 seeks take there.
 - The stress tests on macOS.
 - The editor framework, Circle mode, and trackpad input on Android.
 - Whether Mac trackpad fingers keep arriving with the pointer locked, and how their timestamps compare with key presses.

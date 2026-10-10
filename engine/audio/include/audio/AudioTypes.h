@@ -91,6 +91,8 @@ struct AudioStats
     uint64_t DroppedVoices = 0;
     // Scheduled voices dropped because the music had already passed their start frame.
     uint64_t LateVoices = 0;
+    // Callbacks where streamed music ran out of decoded audio while playing, so it held.
+    uint64_t MusicUnderruns = 0;
     // Commands lost to a full command queue.
     uint64_t DroppedCommands = 0;
     uint32_t RouteChanges = 0;

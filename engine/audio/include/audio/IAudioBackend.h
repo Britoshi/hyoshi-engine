@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio/AudioTypes.h"
+#include "audio/MusicStream.h"
 
 #include "core/Result.h"
 
@@ -10,7 +11,8 @@ namespace hyoshi::audio
 {
 
 // DESIGN.md section 11.1. All methods are for the main thread. Music is a single track whose
-// position is the song clock's timeline; hit sounds are preloaded and played on a voice pool.
+// position is the song clock's timeline, either fully decoded (SetMusic) or streamed
+// (SetMusicStream); hit sounds are preloaded and played on a voice pool.
 class IAudioBackend
 {
 public:
@@ -42,6 +44,10 @@ public:
     // Music. SetMusic stops playback and rewinds to the start. Like SeekMusic, it returns the
     // SeekGeneration that snapshots will report once the audio thread applies it.
     virtual Result<int64_t> SetMusic(PcmBuffer pcm) = 0;
+    // Like SetMusic, for music decoded while it plays. After a seek, the music holds (snapshots
+    // report it as not playing) until the stream has decoded the new position, typically an audio
+    // callback or two.
+    virtual Result<int64_t> SetMusicStream(std::unique_ptr<MusicStream> stream) = 0;
     virtual void PlayMusic() = 0;
     virtual void PauseMusic() = 0;
     // Returns the SeekGeneration that snapshots will report once the audio thread applies it.

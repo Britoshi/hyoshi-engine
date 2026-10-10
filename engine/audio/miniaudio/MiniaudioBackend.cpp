@@ -99,6 +99,7 @@ void MiniaudioBackend::Shutdown()
     retiredBuffers.clear();
     sounds.clear();
     music.reset();
+    musicStream.reset();
 }
 
 void MiniaudioBackend::Update()
@@ -211,11 +212,29 @@ Result<int64_t> MiniaudioBackend::SetMusic(PcmBuffer pcm)
         return Error{"Audio command queue is full"};
     }
     ++seekGeneration;
-    if (music)
-    {
-        Retire(std::move(music));
-    }
+    RetireMusic();
     music = std::move(buffer);
+    return seekGeneration;
+}
+
+Result<int64_t> MiniaudioBackend::SetMusicStream(std::unique_ptr<MusicStream> stream)
+{
+    if (!mixer)
+    {
+        return Error{"The audio backend is not initialized"};
+    }
+    if (stream == nullptr || stream->GetSampleRate() != mixer->GetSampleRate())
+    {
+        return Error{"The music stream must decode at " + std::to_string(mixer->GetSampleRate()) + " Hz"};
+    }
+    if (!Submit({.Type = AudioCommandType::SetMusic, .Stream = stream.get()}))
+    {
+        return Error{"Audio command queue is full"};
+    }
+    ++seekGeneration;
+    RetireMusic();
+    musicStream = std::move(stream);
+    streamEpoch = 0;
     return seekGeneration;
 }
 
@@ -231,16 +250,27 @@ void MiniaudioBackend::PauseMusic()
 
 int64_t MiniaudioBackend::SeekMusic(DspFrame frame)
 {
-    if (Submit({.Type = AudioCommandType::SeekMusic, .Frame = frame}))
+    const DspFrame target = std::clamp<DspFrame>(frame, 0, GetMusicFrameCount());
+    const int64_t epoch = streamEpoch + 1;
+    if (Submit({.Type = AudioCommandType::SeekMusic, .Frame = target, .StreamEpoch = epoch}))
     {
         ++seekGeneration;
+        if (musicStream)
+        {
+            streamEpoch = epoch;
+            musicStream->RequestSeek(target, epoch);
+        }
     }
     return seekGeneration;
 }
 
 DspFrame MiniaudioBackend::GetMusicFrameCount() const
 {
-    return music ? music->GetFrameCount() : 0;
+    if (music)
+    {
+        return music->GetFrameCount();
+    }
+    return musicStream ? musicStream->GetFrameCount() : 0;
 }
 
 AudioClockSnapshot MiniaudioBackend::GetClockSnapshot() const
@@ -336,7 +366,20 @@ Result<void> MiniaudioBackend::CheckFormat(const PcmBuffer& pcm) const
 // The audio thread may still read the buffer until it applies the command just submitted.
 void MiniaudioBackend::Retire(std::unique_ptr<PcmBuffer> buffer)
 {
-    retiredBuffers.push_back({std::move(buffer), commandsSubmitted});
+    retiredBuffers.push_back({.Buffer = std::move(buffer), .RequiredCommands = commandsSubmitted});
+}
+
+// After the command that replaces the music.
+void MiniaudioBackend::RetireMusic()
+{
+    if (music)
+    {
+        Retire(std::move(music));
+    }
+    if (musicStream)
+    {
+        retiredBuffers.push_back({.Stream = std::move(musicStream), .RequiredCommands = commandsSubmitted});
+    }
 }
 
 std::unique_ptr<IAudioBackend> CreateAudioBackend()

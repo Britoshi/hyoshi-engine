@@ -1,5 +1,6 @@
 add_library(hyoshi_audio STATIC
     src/Mixer.cpp
+    src/MusicStream.cpp
     src/Synth.cpp
     miniaudio/MiniaudioBackend.cpp
     miniaudio/MiniaudioDecoder.cpp

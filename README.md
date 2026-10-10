@@ -32,7 +32,7 @@ It renders with Vulkan (MoltenVK on macOS) and uses SDL3 for windowing and input
 - **Game modes as modules.** Mania (vertical lanes, like osu!mania) and Circle (hit circles, sliders, and spinners, like osu!standard), each with a judge, scoring, autoplay, and a playfield renderer.
 - **osu! map import.** osu!mania and osu!standard `.osu` files load directly. `hyoshi-osu-import` converts osu!mania maps to Hyoshi's JSON chart format.
 - **2D renderer.** Sprite batching, distance-field text for any TrueType or OpenType font (including Japanese), safe areas, and Android screen rotation.
-- **Audio.** WAV, MP3, FLAC, and Ogg Vorbis; a mixer that runs in the audio callback; sounds scheduled to exact sample positions in the music.
+- **Audio.** WAV, MP3, FLAC, and Ogg Vorbis. Music streams from the file instead of being decoded whole first, so a song is ready to play in milliseconds; short sounds are preloaded and scheduled to exact sample positions in the music, and a mixer runs in the audio callback.
 - **Game UI.** Immediate-mode buttons, toggles, sliders, and scrolling lists for menus, driven by mouse, touch, or keyboard.
 - **Editor framework.** A game can build a desktop editor: the game itself, with dockable Dear ImGui panels over it. Release builds contain no editor code.
 - **Debug tools.** An ImGui overlay (F1), Vulkan validation in debug builds, and environment variables for screenshots, timed exits, and stress tests.

@@ -1,11 +1,13 @@
 #include "songs/SongPlayer.h"
 
-#include "audio/AudioDecoder.h"
+#include "audio/MusicStream.h"
 #include "core/Log.h"
 #include "platform/Platform.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -27,24 +29,32 @@ void SongPlayer::Load(std::string songName, Loader loader, bool playWhenLoaded)
     loadError.clear();
     shouldPlayWhenLoaded = playWhenLoaded;
     isLoaded = false;
+    loadStart = std::chrono::steady_clock::now();
+    pendingStream = {};
     const uint32_t rate = audio.GetSampleRate();
     pendingMusic = jobs.Submit([loader = std::move(loader), rate] { return loader(rate); });
 }
 
-void SongPlayer::LoadFile(const std::string& path, bool playWhenLoaded)
+void SongPlayer::LoadFile(const std::string& path, bool playWhenLoaded, SongTimeUs leadInUs)
 {
-    Load(
-        path,
-        [path](uint32_t rate) -> hyoshi::Result<hyoshi::audio::PcmBuffer>
+    name = path;
+    loadError.clear();
+    shouldPlayWhenLoaded = playWhenLoaded;
+    isLoaded = false;
+    loadStart = std::chrono::steady_clock::now();
+    pendingMusic = {};
+    const uint32_t rate = audio.GetSampleRate();
+    const hyoshi::audio::MusicStreamOptions options{.LeadInFrames = hyoshi::UsToFrames(leadInUs, rate)};
+    pendingStream = jobs.Submit(
+        [path, rate, options]() -> hyoshi::Result<std::unique_ptr<hyoshi::audio::MusicStream>>
         {
             hyoshi::Result<std::vector<std::byte>> bytes = hyoshi::platform::LoadFile(path);
             if (!bytes)
             {
                 return bytes.GetError();
             }
-            return hyoshi::audio::DecodeAudio(bytes.Value(), rate);
-        },
-        playWhenLoaded);
+            return hyoshi::audio::MusicStream::Open(std::move(bytes).Value(), rate, options);
+        });
 }
 
 void SongPlayer::Update(hyoshi::HostTimeNs now)
@@ -55,11 +65,28 @@ void SongPlayer::Update(hyoshi::HostTimeNs now)
         hyoshi::Result<hyoshi::audio::PcmBuffer> music = pendingMusic.get();
         if (music)
         {
-            OnLoaded(std::move(music).Value());
+            const DspFrame frames = music.Value().GetFrameCount();
+            const uint32_t rate = music.Value().SampleRate;
+            OnLoaded(audio.SetMusic(std::move(music).Value()), frames, rate);
         }
         else
         {
             loadError = music.GetError().Message;
+            HYOSHI_LOG_ERROR("Could not load {}: {}", name, loadError);
+        }
+    }
+    if (hyoshi::IsReady(pendingStream))
+    {
+        hyoshi::Result<std::unique_ptr<hyoshi::audio::MusicStream>> stream = pendingStream.get();
+        if (stream)
+        {
+            const DspFrame frames = stream.Value()->GetFrameCount();
+            const uint32_t rate = stream.Value()->GetSampleRate();
+            OnLoaded(audio.SetMusicStream(std::move(stream).Value()), frames, rate);
+        }
+        else
+        {
+            loadError = stream.GetError().Message;
             HYOSHI_LOG_ERROR("Could not load {}: {}", name, loadError);
         }
     }
@@ -92,10 +119,9 @@ void SongPlayer::Update(hyoshi::HostTimeNs now)
     isDiscontinuity = false;
 }
 
-void SongPlayer::OnLoaded(hyoshi::audio::PcmBuffer music)
+void SongPlayer::OnLoaded(hyoshi::Result<int64_t> generation, DspFrame frameCount, uint32_t sampleRate)
 {
-    const double seconds = static_cast<double>(music.GetFrameCount()) / music.SampleRate;
-    hyoshi::Result<int64_t> generation = audio.SetMusic(std::move(music));
+    const double seconds = static_cast<double>(frameCount) / sampleRate;
     if (!generation)
     {
         loadError = generation.GetError().Message;
@@ -112,7 +138,8 @@ void SongPlayer::OnLoaded(hyoshi::audio::PcmBuffer music)
     {
         audio.PlayMusic();
     }
-    HYOSHI_LOG_INFO("Loaded {} ({:.1f} s)", name, seconds);
+    const std::chrono::duration<double, std::milli> loadTime = std::chrono::steady_clock::now() - loadStart;
+    HYOSHI_LOG_INFO("Loaded {} ({:.1f} s) in {:.0f} ms", name, seconds, loadTime.count());
 }
 
 void SongPlayer::Play()
