@@ -545,6 +545,17 @@ std::vector<std::string> Platform::TakeDroppedFiles()
     return std::exchange(droppedFiles, {});
 }
 
+void Platform::ForgetDroppedFile([[maybe_unused]] const std::string& path)
+{
+#if defined(SDL_PLATFORM_EMSCRIPTEN)
+    // SDL copies the browser's files under /tmp/filedrop/, where they stay until removed.
+    if (path.starts_with("/tmp/filedrop/"))
+    {
+        SDL_RemovePath(path.c_str());
+    }
+#endif
+}
+
 bool Platform::BrowseForFiles([[maybe_unused]] const std::string& accept)
 {
 #if defined(SDL_PLATFORM_EMSCRIPTEN)

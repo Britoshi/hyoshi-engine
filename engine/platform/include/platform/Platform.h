@@ -126,6 +126,10 @@ public:
     // the browser's files are copied into memory first (SDL puts them under /tmp/filedrop/).
     std::vector<std::string> TakeDroppedFiles();
 
+    // Done with a file from TakeDroppedFiles: deletes the platform's copy of it, if it made one (the
+    // web's, in memory). The player's own files, dropped on a desktop window, are left alone.
+    void ForgetDroppedFile(const std::string& path);
+
     // Opens the browser's file picker, showing files that match accept (".osz"); the ones the
     // player chooses arrive with TakeDroppedFiles, as if dropped on the window. Call it from a
     // click or key press, since browsers open pickers only for those. Web only for now: elsewhere it
