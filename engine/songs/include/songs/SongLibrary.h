@@ -23,6 +23,8 @@ struct LibraryChart
     std::string Key;
     uint32_t LaneCount = 0;
     uint32_t NoteCount = 0;
+    // The chart's modes ("mania", "arcaea", "phigros"), as its file lists them.
+    std::vector<std::string> Modes;
     hyoshi::SongTimeUs LengthUs = 0;
     double Bpm = 0.0;
     // Empty for the built-in chart, whose music is generated. Difficulties of one song can have
@@ -47,8 +49,8 @@ struct LibrarySong
 // plays. Runs on a worker, so it only reads the file.
 using ChartReader = std::optional<LibraryChart> (*)(const std::string& path);
 
-// The engine's readers: Mania charts (.rchart.json and osu!mania .osu), and circle charts
-// (osu!standard .osu).
+// The engine's readers: Mania charts (.rchart.json of the lane and line modes, osu!mania .osu, and
+// Phigros packages' info files: LoadMixedChartFile), and circle charts (osu!standard .osu).
 std::optional<LibraryChart> ReadManiaChart(const std::string& path);
 std::optional<LibraryChart> ReadCircleChart(const std::string& path);
 

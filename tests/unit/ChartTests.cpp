@@ -97,8 +97,8 @@ TEST_CASE("The design document's example chart loads")
 TEST_CASE("Invalid charts are rejected with a reason")
 {
     CHECK(ErrorOf("{not json").find("Invalid JSON") != std::string::npos);
-    CHECK(ErrorOf(Replace(EXAMPLE_CHART, R"("formatVersion": 1)", R"("formatVersion": 2)"))
-              .find("Unsupported chart format version 2") != std::string::npos);
+    CHECK(ErrorOf(Replace(EXAMPLE_CHART, R"("formatVersion": 1)", R"("formatVersion": 3)"))
+              .find("Unsupported chart format version 3") != std::string::npos);
     CHECK(ErrorOf(Replace(EXAMPLE_CHART, R"("mode": "mania")", R"("mode": "drum")")).find("'drum'") !=
           std::string::npos);
     CHECK(ErrorOf(Replace(EXAMPLE_CHART, R"({"timeUs": 40000000, "lane": 3})", R"({"timeUs": 500000, "lane": 3})"))

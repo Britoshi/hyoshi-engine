@@ -69,6 +69,11 @@ public:
     void KeepOrder(int32_t layer);
     void Draw(const Sprite& sprite);
     void DrawRect(glm::vec2 topLeft, glm::vec2 size, Color color, int32_t layer = 0);
+    // A solid quadrilateral by its corners (a trapezoid, for something seen in perspective). The
+    // two triangles meet on the diagonal from top right to bottom left, so the shape should be
+    // convex.
+    void DrawQuad(glm::vec2 topLeft, glm::vec2 topRight, glm::vec2 bottomLeft, glm::vec2 bottomRight, Color color,
+                  int32_t layer = 0);
     // Sorts, uploads, and records the draws. Call inside a render pass.
     void End(rhi::ICommandList& commands);
 
@@ -83,12 +88,12 @@ public:
     }
 
 private:
-    // Matches SpriteInstance in shaders/Sprite.slang.
+    // Matches SpriteInstance in shaders/Sprite.slang: the corners, top left and top right, then
+    // bottom left and bottom right.
     struct Instance
     {
-        glm::vec2 Center;
-        glm::vec2 Size;
-        float Angle;
+        glm::vec4 TopCorners;
+        glm::vec4 BottomCorners;
         glm::vec4 UvRect;
         uint32_t Color;
         // Bit 0: IsDistanceField.

@@ -36,7 +36,7 @@ std::string ToLower(std::string text)
 bool IsChartFile(const fs::path& path)
 {
     const std::string name = ToLower(path.filename().string());
-    return name.ends_with(".osu") || name.ends_with(".rchart.json");
+    return name.ends_with(".osu") || name.ends_with(".rchart.json") || name == "info.yml" || name == "info.txt";
 }
 
 struct Found
@@ -106,6 +106,7 @@ LibrarySong MakeDemoSong()
     chart.Metadata = demo.Value().Info.Metadata;
     chart.Key = GetChartKey(chart.Metadata);
     chart.LaneCount = demo.Value().LaneCount;
+    chart.Modes = {"mania"};
     chart.NoteCount = static_cast<uint32_t>(demo.Value().Notes.size());
     chart.LengthUs = GetChartEnd(demo.Value());
     chart.Bpm = DEMO_BPM;
@@ -120,18 +121,22 @@ LibrarySong MakeDemoSong()
 
 std::optional<LibraryChart> ReadManiaChart(const std::string& path)
 {
-    hyoshi::Result<LoadedChart> loaded = LoadChartFile(path);
+    hyoshi::Result<LoadedMixedChart> loaded = LoadMixedChartFile(path);
     if (!loaded)
     {
         // Other osu! modes share the file extension; they're simply not Mania charts.
         HYOSHI_LOG_DEBUG("Library: skipping {}: {}", path, loaded.GetError().Message);
         return std::nullopt;
     }
-    const hyoshi::mania::ManiaChart& chart = loaded.Value().Chart;
+    const LoadedMixedChart& chart = loaded.Value();
     LibraryChart entry =
-        MakeLibraryChart(path, chart.Info, loaded.Value().Directory, static_cast<uint32_t>(chart.Notes.size()),
-                         GetChartEnd(chart), GetMainBpm(chart));
-    entry.LaneCount = chart.LaneCount;
+        MakeLibraryChart(path, chart.Info, chart.Directory, chart.GetNoteCount(), chart.GetEnd(), GetMainBpm(chart));
+    entry.LaneCount = chart.Mania ? chart.Mania->LaneCount : (chart.Arcaea ? chart.Arcaea->LaneCount : 0);
+    entry.Modes = chart.Info.Modes;
+    if (!chart.BackgroundFile.empty())
+    {
+        entry.BackgroundPath = chart.Directory + chart.BackgroundFile;
+    }
     return entry;
 }
 

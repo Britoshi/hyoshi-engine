@@ -38,6 +38,30 @@ void ManiaJudge::Reset(const ManiaChart& maniaChart, const rhythm::HitWindows& h
     }
 }
 
+std::optional<SongTimeUs> ManiaJudge::GetPressTarget(uint32_t laneIndex, SongTimeUs at) const
+{
+    if (chart == nullptr || laneIndex >= lanes.size())
+    {
+        return std::nullopt;
+    }
+    const Lane& lane = lanes[laneIndex];
+    if (lane.ActiveHold)
+    {
+        return std::nullopt;
+    }
+    // Notes already past their window by then would be misses first.
+    for (size_t next = lane.Next; next < lane.Notes.size(); ++next)
+    {
+        const SongTimeUs noteTime = chart->Notes[lane.Notes[next]].Time;
+        if (noteTime + windows.BadUs < at)
+        {
+            continue;
+        }
+        return windows.Classify(at - noteTime) ? std::optional<SongTimeUs>(noteTime) : std::nullopt;
+    }
+    return std::nullopt;
+}
+
 std::optional<SongTimeUs> ManiaJudge::GetDueTime(const Lane& lane) const
 {
     if (lane.ActiveHold)

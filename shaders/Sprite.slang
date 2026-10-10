@@ -1,5 +1,6 @@
-// Instanced sprites: one quad per instance, corners generated from the vertex index (4-vertex
-// triangle strip), positioned in virtual 2D units and mapped to clip space by DrawConstants.
+// Instanced sprites: one quad per instance, its four corners given (rotated rectangles and other
+// quadrilaterals alike), picked by the vertex index (4-vertex triangle strip), positioned in virtual
+// 2D units and mapped to clip space by DrawConstants.
 
 struct DrawConstants
 {
@@ -24,12 +25,12 @@ static const uint DISTANCE_FIELD = 1;
 
 struct SpriteInstance
 {
-    [[vk::location(0)]] float2 center;
-    [[vk::location(1)]] float2 size;
-    [[vk::location(2)]] float angle;
-    [[vk::location(3)]] float4 uvRect;
-    [[vk::location(4)]] float4 color;
-    [[vk::location(5)]] uint flags;
+    // Where the texture's top left and top right go, then its bottom left and bottom right.
+    [[vk::location(0)]] float4 topCorners;
+    [[vk::location(1)]] float4 bottomCorners;
+    [[vk::location(2)]] float4 uvRect;
+    [[vk::location(3)]] float4 color;
+    [[vk::location(4)]] uint flags;
 };
 
 struct VertexOutput
@@ -51,14 +52,11 @@ float2 ToClip(float2 position)
 VertexOutput vertexMain(SpriteInstance instance, uint vertexId: SV_VulkanVertexID)
 {
     float2 corner = float2(float(vertexId & 1), float(vertexId >> 1));
-    float2 local = (corner - 0.5) * instance.size;
-
-    float s = sin(instance.angle);
-    float c = cos(instance.angle);
-    float2 rotated = float2(local.x * c - local.y * s, local.x * s + local.y * c);
+    float4 edge = (vertexId >> 1) != 0 ? instance.bottomCorners : instance.topCorners;
+    float2 position = (vertexId & 1) != 0 ? edge.zw : edge.xy;
 
     VertexOutput output;
-    output.position = float4(ToClip(instance.center + rotated), 0.0, 1.0);
+    output.position = float4(ToClip(position), 0.0, 1.0);
 #if defined(HYOSHI_WGSL)
     // Clip space y points up in WebGPU, down in Vulkan.
     output.position.y = -output.position.y;

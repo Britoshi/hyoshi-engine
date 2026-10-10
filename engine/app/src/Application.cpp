@@ -680,7 +680,13 @@ void Application::RunScene(HostTimeNs now, float deltaSeconds)
     frame.IsKeyboardCaptured = isKeyboardCaptured;
     scene->RunFrame(frame, *ui);
     game.DrawOverlay(frame, *ui);
-    if (std::unique_ptr<Scene> next = scene->TakeNextScene())
+    std::unique_ptr<Scene> next = scene->TakeNextScene();
+    // The editor's choice (play mode, its own views) wins over the scene's.
+    if (std::unique_ptr<Scene> editorNext = editorLayer != nullptr ? editorLayer->TakeNextScene() : nullptr)
+    {
+        next = std::move(editorNext);
+    }
+    if (next)
     {
         endedScene = EndScene();
         scene = std::move(next);

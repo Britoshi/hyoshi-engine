@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -39,6 +40,13 @@ public:
     Result<std::string> GetString(std::string_view key, std::string fallback) const;
     Result<bool> GetBool(std::string_view key, bool fallback) const;
 
+    // Whether the field is an array (of keys, say, rather than one number).
+    bool IsArray(std::string_view key) const;
+    // Calls fn(element, index) for each object of the array field, with errors naming the element.
+    // A missing field is an empty array.
+    Result<void> ForEachObject(std::string_view key,
+                               const std::function<Result<void>(const ChartFields&, size_t)>& fn) const;
+
 private:
     const yyjson_val* Find(std::string_view key) const;
 
@@ -57,6 +65,10 @@ public:
     void AddNumber(std::string_view key, double value);
     void AddString(std::string_view key, std::string_view value);
     void AddBool(std::string_view key, bool value);
+    // A nested object.
+    ChartFieldWriter AddObject(std::string_view key);
+    // An array of `count` objects, each filled by fn(element, index).
+    void AddObjects(std::string_view key, size_t count, const std::function<void(ChartFieldWriter&, size_t)>& fn);
 
 private:
     yyjson_mut_doc* document;
@@ -78,7 +90,23 @@ struct ChartModeFormat
 // mode, sorted notes and timing, and end times not before start times.
 Result<Chart> ParseChart(std::string_view json, const ChartModeFormat& mode);
 
+// The same for a chart of any of `modes`: format 1 (one "mode"), or format 2 (DESIGN.md section
+// 13.5: "modes" lists the chart's modes, "modeSettings" holds an object per mode, and each note
+// says its "mode" when there's more than one). Each note's own mode reads its fields, so a mode's
+// ReadNote sees only its notes, in order. A mode the chart has but `modes` doesn't is an error.
+Result<Chart> ParseChart(std::string_view json, std::span<const ChartModeFormat> modes);
+
+// Parses a JSON document whose root is an object and reads it with `read`: for importers of other
+// formats, which stay free of the JSON library.
+Result<void> ReadJson(std::string_view json, const std::function<Result<void>(const ChartFields& root)>& read);
+
 // Writes a .rchart.json file, indented for readable diffs.
 Result<std::string> WriteChart(const Chart& chart, const ChartModeFormat& mode);
+
+// Writes a chart of any of `modes` as format 2 (DESIGN.md section 13.5): "modes" as chart.Modes
+// lists them, each one's settings under its name, and each note's "mode" (its ChartNote::Mode). A
+// mode's WriteNote gets the note's place among that mode's notes, as its ReadNote saw them. Each
+// of the chart's modes needs its format in `modes`.
+Result<std::string> WriteChart(const Chart& chart, std::span<const ChartModeFormat> modes);
 
 } // namespace hyoshi::rhythm

@@ -1,12 +1,16 @@
 #include "songs/Charts.h"
 
+#include "line/PhigrosImport.h"
+#include "mania/ArcaeaJudge.h"
 #include "osu/OsuManiaImporter.h"
 #include "osu/OsuStandardImporter.h"
 #include "platform/Platform.h"
+#include "rhythm/ChartFile.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
 #include <map>
 #include <string_view>
 #include <utility>
@@ -211,6 +215,152 @@ double GetMainBpm(const ManiaChart& chart)
 double GetMainBpm(const hyoshi::circle::CircleChart& chart)
 {
     return GetLongestBpm(chart.Info, GetChartEnd(chart));
+}
+
+double GetMainBpm(const LoadedMixedChart& chart)
+{
+    return GetLongestBpm(chart.Info, chart.GetEnd());
+}
+
+uint32_t LoadedMixedChart::GetNoteCount() const
+{
+    return static_cast<uint32_t>((Mania ? Mania->Notes.size() : 0) + (Arcaea ? Arcaea->Notes.size() : 0) +
+                                 (Lines ? Lines->Notes.size() : 0));
+}
+
+uint32_t LoadedMixedChart::GetJudgmentCount() const
+{
+    return (Mania ? Mania->GetJudgmentCount() : 0) +
+           (Arcaea ? hyoshi::mania::ArcaeaJudge::GetJudgmentCount(*Arcaea) : 0) +
+           (Lines ? Lines->GetJudgmentCount() : 0);
+}
+
+SongTimeUs LoadedMixedChart::GetEnd() const
+{
+    SongTimeUs end = 0;
+    if (Mania)
+    {
+        end = std::max(end, GetChartEnd(*Mania));
+    }
+    if (Arcaea)
+    {
+        end = std::max(end, GetChartEnd(*Arcaea));
+    }
+    if (Lines)
+    {
+        for (const hyoshi::line::LineNote& note : Lines->Notes)
+        {
+            end = std::max(end, note.EndTime);
+        }
+    }
+    return end;
+}
+
+bool IsPhigrosInfoFile(const std::string& path)
+{
+    const std::string name = std::filesystem::path(path).filename().string();
+    return name == "info.yml" || name == "info.txt";
+}
+
+hyoshi::Result<LoadedMixedChart> LoadMixedChartFile(const std::string& path)
+{
+    LoadedMixedChart loaded;
+    loaded.Directory = GetDirectory(path);
+    if (EndsWith(path, ".osu"))
+    {
+        hyoshi::Result<LoadedChart> mania = LoadChartFile(path);
+        if (!mania)
+        {
+            return mania.GetError();
+        }
+        loaded.Info = mania.Value().Chart.Info;
+        loaded.Info.Modes = {"mania"};
+        loaded.Warnings = std::move(mania.Value().Warnings);
+        loaded.Mania = std::move(mania.Value().Chart);
+        return loaded;
+    }
+
+    hyoshi::Result<std::vector<std::byte>> bytes = hyoshi::platform::LoadFile(path);
+    if (!bytes)
+    {
+        return bytes.GetError();
+    }
+    const std::string_view text(reinterpret_cast<const char*>(bytes.Value().data()), bytes.Value().size());
+
+    if (IsPhigrosInfoFile(path))
+    {
+        const hyoshi::line::PhigrosInfo info = hyoshi::line::ReadPhigrosInfo(text);
+        if (info.ChartFile.empty() || info.MusicFile.empty())
+        {
+            return hyoshi::Error{"The Phigros info names no chart or no music"};
+        }
+        hyoshi::Result<std::vector<std::byte>> chartBytes =
+            hyoshi::platform::LoadFile(loaded.Directory + info.ChartFile);
+        if (!chartBytes)
+        {
+            return chartBytes.GetError();
+        }
+        hyoshi::Result<hyoshi::line::PhigrosImportResult> imported = hyoshi::line::ImportPhigros(
+            {reinterpret_cast<const char*>(chartBytes.Value().data()), chartBytes.Value().size()});
+        if (!imported)
+        {
+            return imported.GetError();
+        }
+        hyoshi::line::LineChart& chart = imported.Value().Chart;
+        chart.Info.Metadata.Title = info.Title.empty() ? info.ChartFile : info.Title;
+        chart.Info.Metadata.Artist = info.Artist;
+        chart.Info.Metadata.Charter = info.Charter;
+        chart.Info.Metadata.DifficultyName = info.Level.empty() ? "Phigros" : info.Level;
+        chart.Info.AudioFile = info.MusicFile;
+        loaded.Info = chart.Info;
+        loaded.BackgroundFile = info.Illustration;
+        loaded.Warnings = std::move(imported.Value().Warnings);
+        loaded.Lines = std::move(chart);
+        return loaded;
+    }
+
+    uint32_t maniaLanes = 0;
+    std::vector<uint32_t> maniaNoteLanes;
+    uint32_t arcaeaLanes = 0;
+    std::vector<uint32_t> arcaeaNoteLanes;
+    std::vector<hyoshi::line::JudgeLine> lines;
+    std::vector<hyoshi::line::LineNote> lineNotes;
+    const std::array<hyoshi::rhythm::ChartModeFormat, 3> formats{
+        hyoshi::mania::MakeLaneFormat("mania", maniaLanes, maniaNoteLanes),
+        hyoshi::mania::MakeLaneFormat("arcaea", arcaeaLanes, arcaeaNoteLanes),
+        hyoshi::line::MakeLineFormat(lines, lineNotes)};
+    hyoshi::Result<hyoshi::rhythm::Chart> chart = hyoshi::rhythm::ParseChart(text, formats);
+    if (!chart)
+    {
+        return chart.GetError();
+    }
+    for (size_t mode = 0; mode < chart.Value().Modes.size(); ++mode)
+    {
+        hyoshi::rhythm::Chart part = hyoshi::rhythm::SelectMode(chart.Value(), static_cast<uint8_t>(mode));
+        const std::string& name = chart.Value().Modes[mode];
+        if (name == "phigros")
+        {
+            hyoshi::Result<hyoshi::line::LineChart> built =
+                hyoshi::line::BuildLineChart(std::move(part), std::move(lines), std::move(lineNotes));
+            if (!built)
+            {
+                return hyoshi::Error{"phigros: " + built.GetError().Message};
+            }
+            loaded.Lines = std::move(built).Value();
+            continue;
+        }
+        const bool isArcaea = name == "arcaea";
+        hyoshi::Result<ManiaChart> built = hyoshi::mania::BuildManiaChart(
+            std::move(part), isArcaea ? arcaeaLanes : maniaLanes, isArcaea ? arcaeaNoteLanes : maniaNoteLanes);
+        if (!built)
+        {
+            return hyoshi::Error{name + ": " + built.GetError().Message};
+        }
+        (isArcaea ? loaded.Arcaea : loaded.Mania) = std::move(built).Value();
+    }
+    loaded.Info = std::move(chart).Value();
+    loaded.Info.Notes.clear();
+    return loaded;
 }
 
 SongTimeUs GetChartEnd(const ManiaChart& chart)

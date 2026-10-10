@@ -111,6 +111,12 @@ public:
     // Every frame after the scene ran, between ImGui's BeginFrame and Render, before the debug
     // overlay's windows so that they can dock.
     virtual void Build() = 0;
+    // A scene to switch to in place of the running one (play mode, the editor's own views), checked
+    // after each frame's scene; it wins over the scene's own next scene.
+    virtual std::unique_ptr<Scene> TakeNextScene()
+    {
+        return nullptr;
+    }
 
     // After the last scene is gone, before the game's Shutdown.
     virtual void Shutdown()

@@ -2,6 +2,7 @@
 # hyoshi::engine, so shipped builds contain no editor code.
 add_library(hyoshi_editor STATIC
     src/Editor.cpp
+    src/FileDialog.cpp
 )
 add_library(hyoshi::editor ALIAS hyoshi_editor)
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rhythm/Chart.h"
+#include "rhythm/ChartFile.h"
 #include "rhythm/ScrollMap.h"
 
 #include "core/Result.h"
@@ -51,6 +52,11 @@ struct ManiaChart
 // Builds the runtime chart from the common chart and one lane per note. Rejects lanes out of
 // range and notes that start before the previous note in their lane has ended.
 Result<ManiaChart> BuildManiaChart(rhythm::Chart chart, uint32_t laneCount, std::span<const uint32_t> lanes);
+
+// A lane mode's part of the chart format: modeSettings {"laneCount": N} and a "lane" per note,
+// read into `laneCount` and `lanes` (in order), and written from them: "mania", or "arcaea" (the
+// same lanes, played by Arcaea's rules on a track in perspective) in a chart of several modes.
+rhythm::ChartModeFormat MakeLaneFormat(std::string mode, uint32_t& laneCount, std::vector<uint32_t>& lanes);
 
 // .rchart.json with "mode": "mania", "modeSettings": {"laneCount": N}, and a "lane" per note.
 Result<ManiaChart> ParseManiaChart(std::string_view json);

@@ -110,8 +110,11 @@ add_library(hyoshi_imgui STATIC
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+    # InputText on std::string, for editors' text fields.
+    ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
 )
-target_include_directories(hyoshi_imgui SYSTEM PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
+target_include_directories(hyoshi_imgui SYSTEM PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends
+                                                      ${imgui_SOURCE_DIR}/misc/cpp)
 target_link_libraries(hyoshi_imgui PUBLIC SDL3::SDL3)
 target_compile_definitions(hyoshi_imgui PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
 

@@ -9,6 +9,7 @@
 #include "core/Log.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 
 namespace hyoshi::renderer
@@ -50,12 +51,11 @@ Result<void> SpriteBatch::Initialize(rhi::IRenderDevice& renderDevice)
     pipelineDesc.TextureCount = 1;
     pipelineDesc.VertexBindings = {{0, sizeof(Instance), rhi::VertexInputRate::Instance}};
     pipelineDesc.VertexAttributes = {
-        {0, 0, rhi::VertexFormat::Float2, static_cast<uint32_t>(offsetof(Instance, Center))},
-        {1, 0, rhi::VertexFormat::Float2, static_cast<uint32_t>(offsetof(Instance, Size))},
-        {2, 0, rhi::VertexFormat::Float, static_cast<uint32_t>(offsetof(Instance, Angle))},
-        {3, 0, rhi::VertexFormat::Float4, static_cast<uint32_t>(offsetof(Instance, UvRect))},
-        {4, 0, rhi::VertexFormat::UByte4Norm, static_cast<uint32_t>(offsetof(Instance, Color))},
-        {5, 0, rhi::VertexFormat::UInt, static_cast<uint32_t>(offsetof(Instance, Flags))},
+        {0, 0, rhi::VertexFormat::Float4, static_cast<uint32_t>(offsetof(Instance, TopCorners))},
+        {1, 0, rhi::VertexFormat::Float4, static_cast<uint32_t>(offsetof(Instance, BottomCorners))},
+        {2, 0, rhi::VertexFormat::Float4, static_cast<uint32_t>(offsetof(Instance, UvRect))},
+        {3, 0, rhi::VertexFormat::UByte4Norm, static_cast<uint32_t>(offsetof(Instance, Color))},
+        {4, 0, rhi::VertexFormat::UInt, static_cast<uint32_t>(offsetof(Instance, Flags))},
     };
     pipelineDesc.DebugName = "Sprite";
 
@@ -125,13 +125,37 @@ void SpriteBatch::KeepOrder(int32_t layer)
 
 void SpriteBatch::Draw(const Sprite& sprite)
 {
+    // The rectangle's corners, turned about its center (clockwise on screen, y down).
+    const glm::vec2 half = sprite.Size * 0.5f;
+    const float cosine = std::cos(sprite.Rotation);
+    const float sine = std::sin(sprite.Rotation);
+    const auto corner = [&](float x, float y)
+    { return sprite.Center + glm::vec2{(x * cosine) - (y * sine), (x * sine) + (y * cosine)}; };
+    const glm::vec2 topLeft = corner(-half.x, -half.y);
+    const glm::vec2 topRight = corner(half.x, -half.y);
+    const glm::vec2 bottomLeft = corner(-half.x, half.y);
+    const glm::vec2 bottomRight = corner(half.x, half.y);
+
     Entry entry;
     entry.Layer = sprite.Layer;
     entry.Texture = sprite.Texture.IsValid() ? sprite.Texture : whiteTexture;
     entry.TextureKey = 0;
-    entry.Data = {sprite.Center,          sprite.Size,
-                  sprite.Rotation,        sprite.UvRect,
-                  PackColor(sprite.Tint), sprite.IsDistanceField ? 1u : 0u};
+    entry.Data = {{topLeft, topRight},
+                  {bottomLeft, bottomRight},
+                  sprite.UvRect,
+                  PackColor(sprite.Tint),
+                  sprite.IsDistanceField ? 1u : 0u};
+    entries.push_back(entry);
+}
+
+void SpriteBatch::DrawQuad(glm::vec2 topLeft, glm::vec2 topRight, glm::vec2 bottomLeft, glm::vec2 bottomRight,
+                           Color color, int32_t layer)
+{
+    Entry entry;
+    entry.Layer = layer;
+    entry.Texture = whiteTexture;
+    entry.TextureKey = 0;
+    entry.Data = {{topLeft, topRight}, {bottomLeft, bottomRight}, {0.0f, 0.0f, 1.0f, 1.0f}, PackColor(color), 0u};
     entries.push_back(entry);
 }
 

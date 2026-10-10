@@ -1,9 +1,13 @@
 #include "editor/Editor.h"
 
+#include "editor/FileDialog.h"
+
 #include "core/Log.h"
 #include "platform/Platform.h"
 
 #include <imgui.h>
+// The dock space's central node, for where the game shows.
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <utility>
@@ -37,10 +41,33 @@ public:
 
     void Build() override
     {
+        DeliverFileDialogs();
+        editor.Update();
         BuildMenuBar();
+        if (services->ArePanelsHidden())
+        {
+            const ImGuiViewport* viewport = ImGui::GetMainViewport();
+            const float menuHeight = ImGui::GetFrameHeight();
+            services->SetGameView({0.0f, menuHeight / std::max(viewport->Size.y, 1.0f), 1.0f,
+                                   1.0f - (menuHeight / std::max(viewport->Size.y, 1.0f))});
+            return;
+        }
         // Over the whole window below the menu bar. The empty center shows the game and passes
         // input through to it.
-        ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const ImGuiID dockSpace = ImGui::DockSpaceOverViewport(0, viewport, ImGuiDockNodeFlags_PassthruCentralNode);
+        if (!isLayoutReady)
+        {
+            isLayoutReady = true;
+            editor.BuildDefaultLayout(dockSpace);
+        }
+        if (const ImGuiDockNode* center = ImGui::DockBuilderGetCentralNode(dockSpace);
+            center != nullptr && viewport->Size.x > 0.0f && viewport->Size.y > 0.0f)
+        {
+            services->SetGameView({(center->Pos.x - viewport->Pos.x) / viewport->Size.x,
+                                   (center->Pos.y - viewport->Pos.y) / viewport->Size.y,
+                                   center->Size.x / viewport->Size.x, center->Size.y / viewport->Size.y});
+        }
         for (PanelSlot& slot : panels)
         {
             if (!slot.IsOpen)
@@ -53,6 +80,11 @@ public:
             }
             ImGui::End();
         }
+    }
+
+    std::unique_ptr<app::Scene> TakeNextScene() override
+    {
+        return services ? services->TakeNextScene() : nullptr;
     }
 
     void Shutdown() override
@@ -74,6 +106,7 @@ private:
         }
         if (ImGui::BeginMenu("File"))
         {
+            editor.BuildFileMenu();
             if (ImGui::MenuItem("Quit"))
             {
                 app->Platform.RequestQuit();
@@ -90,6 +123,7 @@ private:
             ImGui::TextDisabled("F1: debug overlay");
             ImGui::EndMenu();
         }
+        editor.BuildMenus();
         ImGui::EndMainMenuBar();
     }
 
@@ -98,6 +132,7 @@ private:
     std::vector<PanelSlot> panels;
     std::unique_ptr<EditorServices> services;
     bool isInitialized = false;
+    bool isLayoutReady = false;
 };
 
 } // namespace

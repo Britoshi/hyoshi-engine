@@ -46,6 +46,8 @@ struct ChartNote
     int32_t Sample = NO_SAMPLE;
     // Percent, 0 to 100.
     uint32_t SampleVolume = 100;
+    // Which of Chart::Modes the note belongs to.
+    uint8_t Mode = 0;
 
     static constexpr int32_t NO_SAMPLE = -1;
 
@@ -58,8 +60,14 @@ struct ChartNote
 struct Chart
 {
     static constexpr int64_t FORMAT_VERSION = 1;
+    // Format 2 holds notes of several modes in one chart (DESIGN.md section 13.5).
+    static constexpr int64_t MIXED_FORMAT_VERSION = 2;
+    static constexpr size_t MAX_MODES = 8;
 
+    // The first of Modes.
     std::string Mode;
+    // The kinds of notes the chart has, by mode name, as the file lists them: one in format 1.
+    std::vector<std::string> Modes;
     ChartMetadata Metadata;
     // Relative to the chart file.
     std::string AudioFile;
@@ -72,5 +80,8 @@ struct Chart
     // Sorted by Time.
     std::vector<ChartNote> Notes;
 };
+
+// The chart with only one mode's notes (Mode and Modes set to it), for that mode's runtime chart.
+Chart SelectMode(const Chart& chart, uint8_t mode);
 
 } // namespace hyoshi::rhythm

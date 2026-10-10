@@ -79,13 +79,10 @@ Result<ManiaChart> BuildManiaChart(rhythm::Chart chart, uint32_t laneCount, std:
     return result;
 }
 
-Result<ManiaChart> ParseManiaChart(std::string_view json)
+rhythm::ChartModeFormat MakeLaneFormat(std::string mode, uint32_t& laneCount, std::vector<uint32_t>& lanes)
 {
-    uint32_t laneCount = 0;
-    std::vector<uint32_t> lanes;
-
     rhythm::ChartModeFormat format;
-    format.Mode = MODE_NAME;
+    format.Mode = std::move(mode);
     format.ReadSettings = [&laneCount](const rhythm::ChartFields& settings) -> Result<void>
     {
         Result<int64_t> count = settings.GetInt("laneCount");
@@ -114,8 +111,18 @@ Result<ManiaChart> ParseManiaChart(std::string_view json)
         lanes.push_back(static_cast<uint32_t>(lane.Value()));
         return {};
     };
+    format.WriteSettings = [&laneCount](rhythm::ChartFieldWriter& settings)
+    { settings.AddInt("laneCount", laneCount); };
+    format.WriteNote = [&lanes](rhythm::ChartFieldWriter& note, size_t index)
+    { note.AddInt("lane", index < lanes.size() ? lanes[index] : 0); };
+    return format;
+}
 
-    Result<rhythm::Chart> chart = rhythm::ParseChart(json, format);
+Result<ManiaChart> ParseManiaChart(std::string_view json)
+{
+    uint32_t laneCount = 0;
+    std::vector<uint32_t> lanes;
+    Result<rhythm::Chart> chart = rhythm::ParseChart(json, MakeLaneFormat(std::string(MODE_NAME), laneCount, lanes));
     if (!chart)
     {
         return chart.GetError();

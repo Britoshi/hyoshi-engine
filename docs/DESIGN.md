@@ -557,7 +557,7 @@ Android devices often report a surface in the display's natural orientation (usu
 
 | Component | Purpose |
 |---|---|
-| `SpriteBatch` | Instanced quads with per-instance position, size, rotation, UV rect, color. One draw per texture atlas per layer |
+| `SpriteBatch` | Instanced quads with per-instance position, size, rotation, UV rect, color. One draw per texture atlas per layer. As built: each instance carries its four corners (a rotated sprite's are found on the CPU), so `DrawQuad` also draws any convex quadrilateral, such as a trapezoid seen in perspective |
 | `TextRenderer` | MSDF glyph atlas; crisp at any size, cheap to render |
 | `Camera2D` | Orthographic; virtual resolution with aspect-aware scaling |
 | `Camera3D` | Perspective; used by the Highway mode |
@@ -829,7 +829,7 @@ As built (M4): notes can carry their own sound (a keysound), for every mode. The
 | Drum | `kind` (center or rim), `big` (bool), optional `endTimeUs` for rolls, `hitsRequired` for spinner-style notes |
 | Circle | `x`, `y` (playfield units), optional slider: `path` (type, control points), `repeats`, `lengthUnits` |
 | Highway | `lane` (buttons) or `side` + `points` (laser path: time and horizontal position pairs) |
-| Line | `lineId`, `x` (position along the line), `side` (above or below), `kind` (tap, hold, drag, flick), optional `endTimeUs`, `speedMultiplier` |
+| Line | `lineId`, `x` (position along the line), `side` (above or below), `kind` (tap, hold, drag, flick), optional `endTimeUs`, `speedMultiplier` (as built: `line` and `speed`, section 16.5) |
 
 The Line mode also defines `lines` in `modeSettings`, each with its own timeline tracks (position, rotation, opacity, speed).
 
@@ -839,6 +839,31 @@ The Line mode also defines `lines` in `modeSettings`, each with its own timeline
 - The chart hash (xxHash of the cooked file) identifies a chart for replays and scores.
 - `formatVersion` enables migrations; loaders must support all previous versions or refuse clearly.
 - Importers for community formats (osu! `.osu`, StepMania `.sm`/`.ssc`) are planned as tools, useful for testing with real charts. Imported content is for local testing only unless the chart's author permits otherwise.
+
+### 13.5 As built: several modes in one chart (format 2)
+
+A chart can mix modes: format 2 lists them, and each note says which it belongs to. Format 1 charts read as before.
+
+```json
+{
+  "formatVersion": 2,
+  "modes": ["mania", "phigros"],
+  "modeSettings": {
+    "mania": { "laneCount": 4 },
+    "phigros": { "lines": [{ "x": 0.5, "y": [{ "timeUs": 0, "value": 0.25 }, { "timeUs": 8000000, "value": 0.6 }], "speed": 1.2 }] }
+  },
+  "notes": [
+    { "timeUs": 1000000, "mode": "mania", "lane": 0 },
+    { "timeUs": 1000000, "mode": "phigros", "line": 0, "x": -2.5, "side": "above", "kind": "flick" }
+  ]
+}
+```
+
+- `modes` replaces `mode`: up to `Chart::MAX_MODES` (8) names, no repeats. `modeSettings` has an object per mode, keyed by its name. A note's `mode` is required when there's more than one and must be one listed; with one, it's that one. The rest of the chart (metadata, audio, timing, scroll velocity, samples) is shared.
+- `ParseChart` takes a `ChartModeFormat` per mode the game knows (`ReadSettings` and `ReadNote` callbacks), and a chart listing a mode it wasn't given is refused. `ChartNote::Mode` is the note's index into `Chart::Modes`, and `SelectMode` copies the chart with one mode's notes, to build that mode's runtime chart from.
+- The modes so far: `mania` (osu!mania's lanes, `ManiaJudge`), `arcaea` (the same lane fields, Arcaea's rules: section 16.6), and `phigros` (the Line mode: section 16.5). `mania::MakeLaneFormat(name, ...)` reads a lane mode under any name. A game decides what plays together (one lane mode with Phigros lines over it, say).
+- Notes are sorted by time across all modes, as in format 1. Nothing converts notes from one mode to another.
+- `WriteChart(chart, modes)` writes format 2 with the same formats (their `WriteSettings` and `WriteNote`; `ChartFieldWriter::AddObject` and `AddObjects` write nested settings such as lines and their keys). A note's `WriteNote` gets its place among its mode's notes. Values with one key at the start are written as numbers, and floats as the shortest decimal that reads back the same.
 
 ---
 
@@ -1030,11 +1055,13 @@ Modes register themselves with a `ModeRegistry` at startup. The gameplay scene a
 
 | Mode | Input (mobile) | Rendering | Special systems |
 |---|---|---|---|
-| **Mania** | Touch lanes at the bottom of the screen | 2D lanes, GPU-positioned notes, long note bodies | SV via scroll positions |
+| **Mania** | Touch lanes at the bottom of the screen | 2D lanes, GPU-positioned notes, long note bodies; as built, also a track in perspective (`PlayfieldView::Track`, below) | SV via scroll positions |
 | **Drum** | Tap zones: center vs rim (or left and right halves) | Single horizontal lane scrolling | Roll and spinner-style notes with hit counts |
 | **Circle** | Direct touch on circles; slider follow with finger | Circles with approach rings (fade in, no scrolling), slider bodies | Slider curve evaluation (linear, Bezier, circular arc, Catmull-Rom); slider body mesh generation; cursor/finger tracking |
 | **Highway** | Touch buttons plus two drag zones as virtual knobs; gamepad on desktop | Perspective highway (Camera3D + depth), laser ribbons | Analog judgment over time; camera timeline tracks |
 | **Line** | Free touch anywhere near notes on lines; flicks, drags, holds | Rotating, moving lines with notes attached | Heavy timeline animation; per-line scroll integrals; gesture recognition |
+
+As built (Mania's track view): `PlayfieldStyle::View = PlayfieldView::Track` lays the same lanes on a floor receding up the screen, as in Arcaea, drawn with `SpriteBatch::DrawQuad` from a pinhole projection on the CPU (no depth buffer or Camera3D yet). A point `along` the lanes (scroll units past the judgment line) is drawn at eye / (eye + along) of its size at the judgment line, where the lanes are `LaneWidth` wide, so the judgment line, judging, and layouts that only use it are as on a flat playfield. The track vanishes 8% down the canvas, the eye is 1.15 judgment-line-to-horizon heights behind the line, and the track ends where it's drawn at 0.2 scale, where notes appear. A note appearing flares up and settles over the first 35% of the way: a glow that shrinks onto it, a beam of light in its lane's color rising from it and fading upward, and its lane's end of the track lighting up. The judgment banner shrinks to the track's width at its height. `ManiaPlayfield::GetJudgeLineX` maps a canvas point to where the lane under it meets the judgment line, for touch input on the track.
 
 ### 16.3 Build order
 
@@ -1065,6 +1092,25 @@ Circle came before Drum because the first game to use it was ready for it. It fo
 - **Opaque slider bodies.** A body is overlapping discs, the border color then the fill color smaller on top. Translucent discs would darken where they overlap, so bodies are opaque and appear at full strength (under their fading heads). Translucent bodies, and fading them, wait for render targets.
 - **Lead-in.** A chart that starts soon after its music needs silence first. The game streams the music with that much silence in front (`SongPlayer::LoadFile`'s lead-in) and adds its length to `SongClock::ChartOffsetUs`, so note times keep counting from the audio file's start and song time is negative during the lead-in. The judge and the playfield take negative times.
 - **Song library.** `LibraryOptions` picks the chart reader (`ReadManiaChart` by default, or `ReadCircleChart`) and whether the built-in Mania chart is listed. Readers run on the scan's worker, so they're plain functions. `LibraryChart::BackgroundPath` carries a chart's background image.
+
+### 16.5 As built: Line (Phigros)
+
+The Line mode follows Phigros, in its own units, and is read from charts as the `phigros` mode (`modes/line`).
+
+- **Field.** 1920 by 1080 units (`FIELD_WIDTH`, `FIELD_HEIGHT`), fit to the canvas by `LineLayout::Fit`, y down. A line is placed by fractions of the field with y from the bottom and turned counterclockwise in degrees, as Phigros does. A note's `x` is along its line from the line's middle in `X_UNIT`s (0.05625 of the width, so the field is 17.8 across), and its distance from the line is in `DISTANCE_UNIT`s (0.6 of the height).
+- **Lines.** Each of x, y, rotation, opacity, and speed is a number or a list of `{timeUs, value}` keys: linear between keys, held before the first and after the last. Speed is held from key to key instead, and integrated over seconds into the line's floor position (`GetFloorPosition`). A note is drawn its floor position minus the line's, times its own `speed`, from the line, on its side; a hold's body runs to its end's floor position.
+- **Judge** (`LineJudge`, after Phigros). A press reaches a note within 1.6 X units of it along its line (`HIT_HALF_WIDTH`), however far off the line, wherever the line is at the judge's time. Taps and hold heads are graded by timing: Perfect within 80 ms, Good within 160, and Bad from 160 to 180 ms early, the earliest note in reach first. A hold is then held to its end, a second event with the head's result; letting go or straying more than 1.5 reaches from it before its last 100 ms misses the end. A drag is caught by any pointer down in reach within 160 ms of its time, struck or not, and a flick by a swipe across it then (a move of 1 field unit per ms or faster); both are Perfect, judged at their time or when caught after it. A key reaches every note as if pressed on it, and flicks. What isn't struck or caught by 160 ms after its time is missed. Actions are `LineAction` Press, Move, Release, KeyPress, and KeyRelease, with the pointer in `Index` and field positions in quarter units. `GetPressTarget` says when the note a press would strike is due, so a game mixing modes can give a touch to the mode whose note comes first. Autoplay (`MakeAutoplayActions`) presses, drags, and swipes each note on its line.
+- **Drawing** (`LinePlayfield`, three layers). Lines are rotated sprites at their opacity; notes are Phigros's colors (taps blue, drags yellow, flicks red, holds blue with a body), drawn from two field heights (and 10 s) out, and a hit bursts on the line.
+- **Phigros's own charts** (`ImportPhigros`). Format 3, and format 1's moves packed as x × 1000 + y on an 880 by 520 screen. Times are in 1/32 beats at each line's BPM; `notesAbove` and `notesBelow` (type 1 tap, 2 drag, 3 hold, 4 flick) become notes on that side, move, rotate, and disappear events become keys, and speed events become speed keys. The chart's `offset` becomes `AudioOffsetUs`. `ReadPhigrosInfo` reads a package's info.yml (Phira's) or info.txt for the title, artist, charter, level, music, chart, and illustration. `songs::LoadMixedChartFile` loads a package from its info file.
+- **Not yet.** Events eased other than linearly, notes' own `floorPosition` overrides, fake notes, and Phigros's newer RPE format.
+
+### 16.6 As built: Arcaea's lanes
+
+Charts' `arcaea` notes are lane notes, read like Mania's, judged by `ArcaeaJudge` (`modes/mania`). Both lane judges derive from `ILaneJudge`, so `ManiaPlayfield` draws either, and Arcaea's are drawn on the track (`PlayfieldView::Track`).
+
+- **Taps.** A press strikes the earliest tap in its lane within Far: Perfect (a max Pure) within 25 ms, Great (Pure) within 50, Good (Far) within 100. A tap not struck by then is missed (Lost).
+- **Holds** aren't struck or released. A hold is a combo every half beat of its length (every beat from 255 BPM), at the tempo where it starts, each Perfect if its lane is held at that moment and missed if not. It can be pressed at any time, and letting go only loses the combos until it's held again. The first combo waits out the Far window, so it also takes a press up to 100 ms after the start. `ArcaeaJudge::GetJudgmentCount` counts a chart's judgments for scoring.
+- **Not yet.** Arcs, sky notes, and Arcaea's scoring.
 
 ---
 

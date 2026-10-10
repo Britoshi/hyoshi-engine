@@ -1,5 +1,6 @@
 add_library(hyoshi_mania STATIC
     src/ManiaChart.cpp
+    src/ArcaeaJudge.cpp
     src/ManiaJudge.cpp
     src/ManiaPlayfield.cpp
 )

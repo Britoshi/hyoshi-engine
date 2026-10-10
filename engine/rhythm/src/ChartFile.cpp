@@ -2,12 +2,15 @@
 
 #include <yyjson.h>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace hyoshi::rhythm
 {
@@ -246,6 +249,25 @@ Result<bool> ChartFields::GetBool(std::string_view key, bool fallback) const
     return Has(key) ? GetBool(key) : Result<bool>(fallback);
 }
 
+bool ChartFields::IsArray(std::string_view key) const
+{
+    const yyjson_val* value = Find(key);
+    return value != nullptr && yyjson_is_arr(const_cast<yyjson_val*>(value));
+}
+
+Result<void> ChartFields::ForEachObject(std::string_view key,
+                                        const std::function<Result<void>(const ChartFields&, size_t)>& fn) const
+{
+    Result<const yyjson_val*> array = GetOptionalArray(object, key);
+    if (!array)
+    {
+        return array.GetError();
+    }
+    return hyoshi::rhythm::ForEachObject(array.Value(), key,
+                                         [&fn](const ChartFields& fields, const yyjson_val*, size_t index)
+                                         { return fn(fields, index); });
+}
+
 void ChartFieldWriter::AddInt(std::string_view key, int64_t value)
 {
     AddMember(document, object, key, yyjson_mut_sint(document, value));
@@ -266,7 +288,65 @@ void ChartFieldWriter::AddBool(std::string_view key, bool value)
     AddMember(document, object, key, yyjson_mut_bool(document, value));
 }
 
+ChartFieldWriter ChartFieldWriter::AddObject(std::string_view key)
+{
+    yyjson_mut_val* child = yyjson_mut_obj(document);
+    AddMember(document, object, key, child);
+    return {document, child};
+}
+
+void ChartFieldWriter::AddObjects(std::string_view key, size_t count,
+                                  const std::function<void(ChartFieldWriter&, size_t)>& fn)
+{
+    yyjson_mut_val* array = yyjson_mut_arr(document);
+    AddMember(document, object, key, array);
+    for (size_t i = 0; i < count; ++i)
+    {
+        ChartFieldWriter element(document, yyjson_mut_arr_add_obj(document, array));
+        fn(element, i);
+    }
+}
+
+Result<void> ReadJson(std::string_view json, const std::function<Result<void>(const ChartFields& root)>& read)
+{
+    yyjson_read_err readError{};
+    const std::unique_ptr<yyjson_doc, DocumentDeleter> document(
+        yyjson_read_opts(const_cast<char*>(json.data()), json.size(), YYJSON_READ_NOFLAG, nullptr, &readError));
+    if (!document)
+    {
+        return Error{"Invalid JSON at byte " + std::to_string(readError.pos) + ": " + readError.msg};
+    }
+    const yyjson_val* root = yyjson_doc_get_root(document.get());
+    if (!yyjson_is_obj(const_cast<yyjson_val*>(root)))
+    {
+        return Error{"The JSON must be an object"};
+    }
+    return read(ChartFields(root));
+}
+
+Chart SelectMode(const Chart& chart, uint8_t mode)
+{
+    Chart selected = chart;
+    selected.Mode = mode < chart.Modes.size() ? chart.Modes[mode] : chart.Mode;
+    selected.Modes = {selected.Mode};
+    selected.Notes.clear();
+    for (const ChartNote& note : chart.Notes)
+    {
+        if (note.Mode == mode)
+        {
+            selected.Notes.push_back(note);
+            selected.Notes.back().Mode = 0;
+        }
+    }
+    return selected;
+}
+
 Result<Chart> ParseChart(std::string_view json, const ChartModeFormat& mode)
+{
+    return ParseChart(json, std::span<const ChartModeFormat>(&mode, 1));
+}
+
+Result<Chart> ParseChart(std::string_view json, std::span<const ChartModeFormat> modes)
 {
     yyjson_read_err readError{};
     const std::unique_ptr<yyjson_doc, DocumentDeleter> document(
@@ -288,23 +368,77 @@ Result<Chart> ParseChart(std::string_view json, const ChartModeFormat& mode)
     {
         return version.GetError();
     }
-    if (version.Value() != Chart::FORMAT_VERSION)
+    const bool isMixed = version.Value() == Chart::MIXED_FORMAT_VERSION;
+    if (version.Value() != Chart::FORMAT_VERSION && !isMixed)
     {
         return Error{"Unsupported chart format version " + std::to_string(version.Value()) + "; this build reads " +
-                     std::to_string(Chart::FORMAT_VERSION)};
+                     std::to_string(Chart::FORMAT_VERSION) + " and " + std::to_string(Chart::MIXED_FORMAT_VERSION)};
     }
 
+    // The chart's modes, and the format that reads each.
     Chart chart;
-    Result<std::string> chartMode = file.GetString("mode");
-    if (!chartMode)
+    std::vector<const ChartModeFormat*> formats;
+    const auto addMode = [&](std::string name) -> Result<void>
     {
-        return chartMode.GetError();
-    }
-    if (chartMode.Value() != mode.Mode)
+        const auto format = std::find_if(modes.begin(), modes.end(),
+                                         [&name](const ChartModeFormat& candidate) { return candidate.Mode == name; });
+        if (format == modes.end())
+        {
+            std::string known;
+            for (const ChartModeFormat& candidate : modes)
+            {
+                known += (known.empty() ? "'" : ", '") + candidate.Mode + "'";
+            }
+            return Error{"This is a '" + name + "' chart, not " + known};
+        }
+        if (std::find(chart.Modes.begin(), chart.Modes.end(), name) != chart.Modes.end())
+        {
+            return Error{"'modes' lists '" + name + "' twice"};
+        }
+        chart.Modes.push_back(std::move(name));
+        formats.push_back(&*format);
+        return {};
+    };
+    if (isMixed)
     {
-        return Error{"This is a '" + chartMode.Value() + "' chart, not '" + mode.Mode + "'"};
+        const yyjson_val* list = FindMember(root, "modes");
+        if (list == nullptr || !yyjson_is_arr(const_cast<yyjson_val*>(list)) ||
+            yyjson_arr_size(const_cast<yyjson_val*>(list)) == 0)
+        {
+            return Error{"'modes' must be a list of the chart's modes"};
+        }
+        size_t index = 0;
+        size_t count = 0;
+        yyjson_val* element = nullptr;
+        yyjson_arr_foreach(const_cast<yyjson_val*>(list), index, count, element)
+        {
+            if (!yyjson_is_str(element))
+            {
+                return Error{"modes[" + std::to_string(index) + "] must be a string"};
+            }
+            if (Result<void> result = addMode(std::string(yyjson_get_str(element), yyjson_get_len(element))); !result)
+            {
+                return result.GetError();
+            }
+        }
+        if (chart.Modes.size() > Chart::MAX_MODES)
+        {
+            return Error{"A chart has at most " + std::to_string(Chart::MAX_MODES) + " modes"};
+        }
     }
-    chart.Mode = std::move(chartMode).Value();
+    else
+    {
+        Result<std::string> chartMode = file.GetString("mode");
+        if (!chartMode)
+        {
+            return chartMode.GetError();
+        }
+        if (Result<void> result = addMode(std::move(chartMode).Value()); !result)
+        {
+            return result.GetError();
+        }
+    }
+    chart.Mode = chart.Modes.front();
 
     Result<const yyjson_val*> metadata = GetObject(root, "metadata");
     if (!metadata)
@@ -416,16 +550,26 @@ Result<Chart> ParseChart(std::string_view json, const ChartModeFormat& mode)
         return scrollResult.GetError();
     }
 
-    if (mode.ReadSettings)
+    // Format 1's modeSettings are the mode's own; format 2's hold an object per mode.
+    for (size_t i = 0; i < formats.size(); ++i)
     {
+        if (!formats[i]->ReadSettings)
+        {
+            continue;
+        }
         Result<const yyjson_val*> settings = GetObject(root, "modeSettings");
+        if (settings && isMixed)
+        {
+            settings = GetObject(settings.Value(), chart.Modes[i]);
+        }
         if (!settings)
         {
-            return settings.GetError();
+            return isMixed ? WithContext("modeSettings", settings.GetError()) : settings.GetError();
         }
-        if (Result<void> result = mode.ReadSettings(ChartFields(settings.Value())); !result)
+        if (Result<void> result = formats[i]->ReadSettings(ChartFields(settings.Value())); !result)
         {
-            return WithContext("modeSettings", result.GetError());
+            return WithContext(isMixed ? "modeSettings." + chart.Modes[i] : std::string("modeSettings"),
+                               result.GetError());
         }
     }
 
@@ -435,47 +579,63 @@ Result<Chart> ParseChart(std::string_view json, const ChartModeFormat& mode)
         return Error{"'notes' must be an array"};
     }
     chart.Notes.reserve(yyjson_arr_size(const_cast<yyjson_val*>(notes)));
-    Result<void> notesResult =
-        ForEachObject(notes, "notes",
-                      [&chart, &mode](const ChartFields& fields, const yyjson_val*, size_t index) -> Result<void>
-                      {
-                          Result<int64_t> time = fields.GetInt("timeUs");
-                          if (!time)
-                          {
-                              return time.GetError();
-                          }
-                          Result<int64_t> endTime = fields.GetInt("endTimeUs", time.Value());
-                          if (!endTime)
-                          {
-                              return endTime.GetError();
-                          }
-                          if (endTime.Value() < time.Value())
-                          {
-                              return Error{"'endTimeUs' is before 'timeUs'"};
-                          }
-                          if (!chart.Notes.empty() && time.Value() < chart.Notes.back().Time)
-                          {
-                              return Error{"notes must be sorted by time"};
-                          }
-                          Result<int64_t> sample = fields.GetInt("sample", ChartNote::NO_SAMPLE);
-                          Result<int64_t> sampleVolume = fields.GetInt("sampleVolume", 100);
-                          if (!sample || !sampleVolume)
-                          {
-                              return sample ? sampleVolume.GetError() : sample.GetError();
-                          }
-                          if (sample.Value() != ChartNote::NO_SAMPLE &&
-                              (sample.Value() < 0 || std::cmp_greater_equal(sample.Value(), chart.Samples.size())))
-                          {
-                              return Error{"'sample' " + std::to_string(sample.Value()) + " is not in 'samples'"};
-                          }
-                          if (sampleVolume.Value() < 0 || sampleVolume.Value() > 100)
-                          {
-                              return Error{"'sampleVolume' must be 0 to 100"};
-                          }
-                          chart.Notes.push_back({time.Value(), endTime.Value(), static_cast<int32_t>(sample.Value()),
-                                                 static_cast<uint32_t>(sampleVolume.Value())});
-                          return mode.ReadNote ? mode.ReadNote(fields, index) : Result<void>();
-                      });
+    Result<void> notesResult = ForEachObject(
+        notes, "notes",
+        [&chart, &formats](const ChartFields& fields, const yyjson_val*, size_t index) -> Result<void>
+        {
+            // With one mode, notes needn't name it.
+            Result<std::string> noteMode =
+                fields.GetString("mode", chart.Modes.size() == 1 ? chart.Modes.front() : std::string());
+            if (!noteMode)
+            {
+                return noteMode.GetError();
+            }
+            const auto modeIndex = static_cast<size_t>(
+                std::find(chart.Modes.begin(), chart.Modes.end(), noteMode.Value()) - chart.Modes.begin());
+            if (modeIndex == chart.Modes.size())
+            {
+                return Error{noteMode.Value().empty()
+                                 ? "'mode' is needed in a chart of several modes"
+                                 : "'mode' '" + noteMode.Value() + "' isn't one of the chart's 'modes'"};
+            }
+            Result<int64_t> time = fields.GetInt("timeUs");
+            if (!time)
+            {
+                return time.GetError();
+            }
+            Result<int64_t> endTime = fields.GetInt("endTimeUs", time.Value());
+            if (!endTime)
+            {
+                return endTime.GetError();
+            }
+            if (endTime.Value() < time.Value())
+            {
+                return Error{"'endTimeUs' is before 'timeUs'"};
+            }
+            if (!chart.Notes.empty() && time.Value() < chart.Notes.back().Time)
+            {
+                return Error{"notes must be sorted by time"};
+            }
+            Result<int64_t> sample = fields.GetInt("sample", ChartNote::NO_SAMPLE);
+            Result<int64_t> sampleVolume = fields.GetInt("sampleVolume", 100);
+            if (!sample || !sampleVolume)
+            {
+                return sample ? sampleVolume.GetError() : sample.GetError();
+            }
+            if (sample.Value() != ChartNote::NO_SAMPLE &&
+                (sample.Value() < 0 || std::cmp_greater_equal(sample.Value(), chart.Samples.size())))
+            {
+                return Error{"'sample' " + std::to_string(sample.Value()) + " is not in 'samples'"};
+            }
+            if (sampleVolume.Value() < 0 || sampleVolume.Value() > 100)
+            {
+                return Error{"'sampleVolume' must be 0 to 100"};
+            }
+            chart.Notes.push_back({time.Value(), endTime.Value(), static_cast<int32_t>(sample.Value()),
+                                   static_cast<uint32_t>(sampleVolume.Value()), static_cast<uint8_t>(modeIndex)});
+            const ChartModeFormat& format = *formats[modeIndex];
+            return format.ReadNote ? format.ReadNote(fields, index) : Result<void>();
+        });
     if (!notesResult)
     {
         return notesResult.GetError();
@@ -484,15 +644,30 @@ Result<Chart> ParseChart(std::string_view json, const ChartModeFormat& mode)
     return chart;
 }
 
-Result<std::string> WriteChart(const Chart& chart, const ChartModeFormat& mode)
+namespace
+{
+
+// Format 1 with one mode, or format 2 with a format for each of the chart's modes, in its order.
+Result<std::string> WriteChartFile(const Chart& chart, std::span<const ChartModeFormat* const> formats, bool isMixed)
 {
     const std::unique_ptr<yyjson_mut_doc, DocumentDeleter> document(yyjson_mut_doc_new(nullptr));
     yyjson_mut_doc* doc = document.get();
     yyjson_mut_val* root = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, root);
 
-    yyjson_mut_obj_add_sint(doc, root, "formatVersion", Chart::FORMAT_VERSION);
-    yyjson_mut_obj_add_strncpy(doc, root, "mode", chart.Mode.data(), chart.Mode.size());
+    yyjson_mut_obj_add_sint(doc, root, "formatVersion", isMixed ? Chart::MIXED_FORMAT_VERSION : Chart::FORMAT_VERSION);
+    if (isMixed)
+    {
+        yyjson_mut_val* modes = yyjson_mut_obj_add_arr(doc, root, "modes");
+        for (const std::string& name : chart.Modes)
+        {
+            yyjson_mut_arr_add_strncpy(doc, modes, name.data(), name.size());
+        }
+    }
+    else
+    {
+        yyjson_mut_obj_add_strncpy(doc, root, "mode", chart.Mode.data(), chart.Mode.size());
+    }
 
     ChartFieldWriter metadata(doc, yyjson_mut_obj_add_obj(doc, root, "metadata"));
     metadata.AddString("title", chart.Metadata.Title);
@@ -534,10 +709,22 @@ Result<std::string> WriteChart(const Chart& chart, const ChartModeFormat& mode)
         yyjson_mut_obj_add_real(doc, object, "multiplier", point.Multiplier);
     }
 
-    if (mode.WriteSettings)
+    if (isMixed)
     {
         ChartFieldWriter settings(doc, yyjson_mut_obj_add_obj(doc, root, "modeSettings"));
-        mode.WriteSettings(settings);
+        for (size_t i = 0; i < formats.size(); ++i)
+        {
+            ChartFieldWriter modeSettings = settings.AddObject(chart.Modes[i]);
+            if (formats[i]->WriteSettings)
+            {
+                formats[i]->WriteSettings(modeSettings);
+            }
+        }
+    }
+    else if (formats.front()->WriteSettings)
+    {
+        ChartFieldWriter settings(doc, yyjson_mut_obj_add_obj(doc, root, "modeSettings"));
+        formats.front()->WriteSettings(settings);
     }
 
     // Notes go one per line (below), so they're written separately from the indented document.
@@ -553,8 +740,16 @@ Result<std::string> WriteChart(const Chart& chart, const ChartModeFormat& mode)
     std::free(text);
 
     std::string notes = "[";
+    // Each note's place among its mode's notes.
+    std::vector<size_t> modeNoteCounts(formats.size(), 0);
     for (size_t i = 0; i < chart.Notes.size(); ++i)
     {
+        const size_t mode = isMixed ? chart.Notes[i].Mode : 0;
+        if (mode >= formats.size())
+        {
+            return Error{"Note " + std::to_string(i) + "'s mode isn't one of the chart's"};
+        }
+        const size_t modeIndex = modeNoteCounts[mode]++;
         const std::unique_ptr<yyjson_mut_doc, DocumentDeleter> noteDocument(yyjson_mut_doc_new(nullptr));
         yyjson_mut_val* object = yyjson_mut_obj(noteDocument.get());
         yyjson_mut_doc_set_root(noteDocument.get(), object);
@@ -563,10 +758,15 @@ Result<std::string> WriteChart(const Chart& chart, const ChartModeFormat& mode)
         {
             yyjson_mut_obj_add_sint(noteDocument.get(), object, "endTimeUs", chart.Notes[i].EndTime);
         }
-        if (mode.WriteNote)
+        if (isMixed)
+        {
+            yyjson_mut_obj_add_strncpy(noteDocument.get(), object, "mode", chart.Modes[mode].data(),
+                                       chart.Modes[mode].size());
+        }
+        if (formats[mode]->WriteNote)
         {
             ChartFieldWriter note(noteDocument.get(), object);
-            mode.WriteNote(note, i);
+            formats[mode]->WriteNote(note, isMixed ? modeIndex : i);
         }
         if (chart.Notes[i].Sample != ChartNote::NO_SAMPLE)
         {
@@ -595,6 +795,38 @@ Result<std::string> WriteChart(const Chart& chart, const ChartModeFormat& mode)
     }
     output.replace(position + placeholder.size() - 2, 2, notes);
     return output + "\n";
+}
+
+} // namespace
+
+Result<std::string> WriteChart(const Chart& chart, const ChartModeFormat& mode)
+{
+    const std::array<const ChartModeFormat*, 1> formats{&mode};
+    return WriteChartFile(chart, formats, false);
+}
+
+Result<std::string> WriteChart(const Chart& chart, std::span<const ChartModeFormat> modes)
+{
+    if (chart.Modes.empty() || chart.Modes.size() > Chart::MAX_MODES)
+    {
+        return Error{"A chart has 1 to " + std::to_string(Chart::MAX_MODES) + " modes"};
+    }
+    std::vector<const ChartModeFormat*> formats;
+    for (const std::string& name : chart.Modes)
+    {
+        const auto format = std::find_if(modes.begin(), modes.end(),
+                                         [&name](const ChartModeFormat& candidate) { return candidate.Mode == name; });
+        if (format == modes.end())
+        {
+            return Error{"No format for the chart's mode '" + name + "'"};
+        }
+        if (std::count(chart.Modes.begin(), chart.Modes.end(), name) > 1)
+        {
+            return Error{"The chart lists '" + name + "' twice"};
+        }
+        formats.push_back(&*format);
+    }
+    return WriteChartFile(chart, formats, true);
 }
 
 } // namespace hyoshi::rhythm
