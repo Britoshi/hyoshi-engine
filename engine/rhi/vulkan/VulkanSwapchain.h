@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanCommon.h"
+#include "rhi/RhiTypes.h"
 
 #include <cstdint>
 #include <vector>
@@ -15,6 +16,8 @@ struct SwapchainCreateInfo
     VkSurfaceKHR Surface = VK_NULL_HANDLE;
     // Window size in pixels. Only used when the surface doesn't dictate its own extent.
     VkExtent2D WindowExtent{};
+    // Used when the surface offers it (DeviceConfig::PreferredPresentMode); FIFO otherwise.
+    PresentMode PreferredPresentMode = PresentMode::Fifo;
 };
 
 // Swapchain images, their views and framebuffers, and one render-finished semaphore per image.
@@ -85,6 +88,8 @@ private:
     VkFormat format = VK_FORMAT_UNDEFINED;
     VkExtent2D extent{};
     VkSurfaceTransformFlagBitsKHR transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    // None yet, so the first one chosen is logged.
+    VkPresentModeKHR presentMode = VK_PRESENT_MODE_MAX_ENUM_KHR;
     bool supportsTransferSource = false;
 
     std::vector<VkImage> images;

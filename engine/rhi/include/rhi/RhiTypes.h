@@ -208,6 +208,19 @@ struct Rect
     uint32_t Height = 0;
 };
 
+// How finished frames reach the display.
+enum class PresentMode : uint8_t
+{
+    // Queued behind vsync. Every device has it, and it paces frames to the display.
+    Fifo,
+    // The newest finished frame at each refresh, without tearing: a frame or two sooner than FIFO.
+    // Some drivers still hold frames back with it in fullscreen (NVIDIA's, with variable refresh).
+    Mailbox,
+    // At once, tearing where the display isn't composited (fullscreen): the soonest. Mailbox where
+    // it isn't offered.
+    Immediate,
+};
+
 struct DeviceConfig
 {
     std::string ApplicationName = "Hyoshi";
@@ -217,6 +230,10 @@ struct DeviceConfig
 
     // Where the pipeline cache is loaded from and saved to. Empty disables persistence.
     std::string PipelineCachePath;
+
+    // Used where the surface offers it; FIFO otherwise. Anything but FIFO no longer paces frames to
+    // the display, so the caller caps the frame rate (AppConfig::LowLatency).
+    PresentMode PreferredPresentMode = PresentMode::Fifo;
 };
 
 } // namespace hyoshi::rhi

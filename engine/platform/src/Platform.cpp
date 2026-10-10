@@ -235,6 +235,10 @@ Result<void> Platform::Initialize(const PlatformConfig& config)
     // Mac trackpad fingers arrive as touches on an indirect device, with where they touch the pad
     // (Trackpad events, below). Without this SDL drops them. The pointer moves as before.
     SDL_SetHint(SDL_HINT_TRACKPAD_IS_TOUCH_ONLY, "1");
+    // Windows keys through raw input, which SDL reads on its own thread and stamps with the precise
+    // clock as they arrive. Window messages carry GetMessageTime, which moves in 15 to 16 ms steps
+    // (DESIGN.md section 12.3). Text input still comes from the messages.
+    SDL_SetHint(SDL_HINT_WINDOWS_RAW_KEYBOARD, "1");
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
         return Error{std::string("SDL_Init failed: ") + SDL_GetError()};
@@ -586,6 +590,22 @@ HostTimeNs Platform::GetHostTimeNs() const
     return ReadHostClock();
 }
 
+void Platform::SleepUntil(HostTimeNs time) const
+{
+    const HostTimeNs now = ReadHostClock();
+    if (time > now)
+    {
+        SDL_DelayPrecise(static_cast<Uint64>(time - now));
+    }
+}
+
+float Platform::GetRefreshRate() const
+{
+    const SDL_DisplayMode* mode =
+        window != nullptr ? SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window)) : nullptr;
+    return mode != nullptr ? mode->refresh_rate : 0.0f;
+}
+
 HostTimeNs ReadHostClock()
 {
     return static_cast<HostTimeNs>(SDL_GetTicksNS());
@@ -699,6 +719,13 @@ void Platform::SetPointerLocked(bool isLocked)
 bool Platform::IsPointerLocked() const
 {
     return window != nullptr && SDL_GetWindowRelativeMouseMode(window);
+}
+
+void Platform::SetPointerSpeed(float speed)
+{
+    // SDL reads the hint whenever it changes. Its relative motion is raw (on Windows, raw input),
+    // since SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE is off by default.
+    SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_SPEED_SCALE, std::to_string(speed).c_str());
 }
 
 void Platform::ApplyCursor()

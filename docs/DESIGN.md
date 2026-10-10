@@ -534,7 +534,7 @@ Design notes:
 | macOS | Enable `VK_KHR_portability_enumeration` (instance) and `VK_KHR_portability_subset` (device) |
 | Render passes | Traditional `VkRenderPass` and `VkFramebuffer` objects, created and cached by the backend from `RenderPassDesc`. Dynamic rendering is an optional future optimization, since many Android devices lack it |
 | Frames in flight | 2 |
-| Present mode | FIFO (guaranteed everywhere, battery friendly). Offer MAILBOX on desktop when available |
+| Present mode | FIFO (guaranteed everywhere, battery friendly). IMMEDIATE on desktop when the game asks for low latency (`AppConfig::LowLatency`), or MAILBOX where the surface doesn't offer it |
 | Memory | VMA. Depth and MSAA attachments use `TRANSIENT_ATTACHMENT` usage with lazily allocated memory, so they never leave tile memory on mobile |
 | Descriptors | Per-frame descriptor pools reset each frame. No bindless (poor mobile support). Texture atlases keep bind counts low |
 | Pipeline cache | `VkPipelineCache` saved to disk on background/exit and loaded on startup to avoid shader compile hitches |
@@ -599,6 +599,7 @@ For the Line mode, each judgment line has its own scroll integral and an animate
 ### 10.6 Frame pacing
 
 - Render at the display's refresh rate (60, 90, or 120 Hz), capped by FIFO present.
+- Desktop games that ask for low latency (`AppConfig::LowLatency`, for a cursor the game draws) present with IMMEDIATE (MAILBOX where it isn't offered; MAILBOX alone still lagged in fullscreen on an NVIDIA card with G-SYNC) and cap the frame rate at four times the display's, waiting before the frame's events are read so it starts with the newest input.
 - Never render uncapped on mobile.
 - Android Frame Pacing library (Swappy) is a planned addition after M4 for smoother presentation on Android.
 - On menus with no animation, drop to a low frame rate or render on demand to save battery.
@@ -745,7 +746,7 @@ As built (M8): Mac trackpads report each finger's position on the pad, and `Trac
 
 SDL3 event timestamps are in nanoseconds, but **M1 must verify** that on Android they originate from the OS event time (`MotionEvent` event time) rather than the moment SDL processed the event. If they do not, add a thin native hook that captures `MotionEvent.getEventTime()` and historical samples. The same check applies to iOS (`UITouch.timestamp`) later.
 
-As built (Windows): SDL 3.4 stamps Windows key and mouse messages from `GetMessageTime`, the system tick count, which advances in 15 to 16 ms steps. `timeBeginPeriod(1)`, which SDL calls, doesn't make it finer (measured on the development PC). Press times are therefore rounded to that step, as coarse as the ±16 ms Perfect window. Not fixed yet. The likely fix is raw input read on a dedicated thread and stamped with `QueryPerformanceCounter`, the clock `SDL_GetTicksNS` uses.
+As built (Windows): SDL 3.4 stamps Windows key and mouse messages from `GetMessageTime`, the system tick count, which advances in 15 to 16 ms steps. `timeBeginPeriod(1)`, which SDL calls, doesn't make it finer (measured on the development PC). Press times were therefore rounded to that step, as coarse as the ±16 ms Perfect window. Fixed for keys (2026-10-09): `SDL_HINT_WINDOWS_RAW_KEYBOARD` has SDL read them as raw input on its own thread, stamped with `SDL_GetTicksNS` as they arrive. Mouse buttons are raw only while the pointer is locked (`Platform::SetPointerLocked`, relative mode); otherwise they still carry the message time.
 
 ### 12.4 Touch handling
 

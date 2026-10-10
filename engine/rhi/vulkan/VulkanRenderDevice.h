@@ -199,6 +199,7 @@ private:
     VkRenderPass swapchainRenderPass = VK_NULL_HANDLE;
     VkFormat renderPassFormat = VK_FORMAT_UNDEFINED;
     bool isSwapchainDirty = false;
+    PresentMode preferredPresentMode = PresentMode::Fifo;
 
     std::array<FrameData, FRAMES_IN_FLIGHT> frames{};
     uint32_t frameIndex = 0;

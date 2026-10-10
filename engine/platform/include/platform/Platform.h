@@ -146,6 +146,12 @@ public:
 
     HostTimeNs GetHostTimeNs() const;
 
+    // Waits until the host clock reaches time, to well under a millisecond (it spins at the end).
+    void SleepUntil(HostTimeNs time) const;
+
+    // The refresh rate of the window's display in Hz, or 0 when unknown.
+    float GetRefreshRate() const;
+
     // Size of the window's drawable area in pixels (2x the logical size on Retina displays).
     PixelSize GetWindowPixelSize() const;
 
@@ -161,12 +167,18 @@ public:
     // own button and menu).
     bool IsFullscreen() const;
 
-    // Hides the pointer and keeps it in the window while the window has focus, for aiming with
-    // something else (a trackpad's positions on the pad). Pointer events still arrive, but their
-    // positions stop moving. Desktop only; unlocking shows the pointer again, unless
+    // Hides the pointer and keeps it in the window while the window has focus, for a game that draws
+    // its own and reads the mouse raw, or aims with something else (a trackpad's positions on the
+    // pad). Pointer events still arrive: their position moves by the mouse's own motion, without
+    // the system's pointer speed or acceleration (SetPointerSpeed scales it), and stays in the
+    // window. Desktop only; unlocking puts the system's pointer there and shows it again, unless
     // SetCursorHidden hid it.
     void SetPointerLocked(bool isLocked);
     bool IsPointerLocked() const;
+
+    // While the pointer is locked, how far it moves for each count of the mouse's own motion, in
+    // window units (1, the default, is one each).
+    void SetPointerSpeed(float speed);
 
     // Hides the system's mouse cursor, for a game that draws its own (on the web too), from the
     // next ApplyCursor.

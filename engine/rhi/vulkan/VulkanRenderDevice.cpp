@@ -284,6 +284,7 @@ Result<void> VulkanRenderDevice::Initialize(const DeviceConfig& config, platform
 {
     HYOSHI_ASSERT(!isInitialized);
     platform = &targetPlatform;
+    preferredPresentMode = config.PreferredPresentMode;
 
     // Share the Vulkan library SDL loaded, rather than volk loading a second copy.
     auto getInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
@@ -719,6 +720,7 @@ Result<void> VulkanRenderDevice::CreateSwapchainResources()
     createInfo.Surface = surface;
     createInfo.WindowExtent = {static_cast<uint32_t>(std::max(pixelSize.Width, 0)),
                                static_cast<uint32_t>(std::max(pixelSize.Height, 0))};
+    createInfo.PreferredPresentMode = preferredPresentMode;
 
     Result<bool> created = swapchain.Create(createInfo);
     if (!created)

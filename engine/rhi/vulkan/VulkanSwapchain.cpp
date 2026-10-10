@@ -46,6 +46,39 @@ VkCompositeAlphaFlagBitsKHR ChooseCompositeAlpha(VkCompositeAlphaFlagsKHR suppor
     return VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 }
 
+// The preferred mode where the surface offers it. Immediate falls back to mailbox, the next sooner,
+// and anything to FIFO, the only one every device supports.
+VkPresentModeKHR ChoosePresentMode(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, PresentMode preferred)
+{
+    if (preferred == PresentMode::Fifo)
+    {
+        return VK_PRESENT_MODE_FIFO_KHR;
+    }
+    uint32_t modeCount = 0;
+    vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &modeCount, nullptr);
+    std::vector<VkPresentModeKHR> modes(modeCount);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &modeCount, modes.data());
+    const auto isOffered = [&modes](VkPresentModeKHR mode) { return std::ranges::find(modes, mode) != modes.end(); };
+    if (preferred == PresentMode::Immediate && isOffered(VK_PRESENT_MODE_IMMEDIATE_KHR))
+    {
+        return VK_PRESENT_MODE_IMMEDIATE_KHR;
+    }
+    return isOffered(VK_PRESENT_MODE_MAILBOX_KHR) ? VK_PRESENT_MODE_MAILBOX_KHR : VK_PRESENT_MODE_FIFO_KHR;
+}
+
+const char* GetPresentModeName(VkPresentModeKHR mode)
+{
+    switch (mode)
+    {
+    case VK_PRESENT_MODE_MAILBOX_KHR:
+        return "mailbox";
+    case VK_PRESENT_MODE_IMMEDIATE_KHR:
+        return "immediate";
+    default:
+        return "FIFO";
+    }
+}
+
 bool IsRotated90Or270(VkSurfaceTransformFlagBitsKHR transform)
 {
     return transform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR || transform == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR;
@@ -125,8 +158,14 @@ Result<bool> VulkanSwapchain::Create(const SwapchainCreateInfo& info)
     createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     createInfo.preTransform = transform;
     createInfo.compositeAlpha = ChooseCompositeAlpha(capabilities.supportedCompositeAlpha);
-    // FIFO is the only mode every device supports, and it paces frames to the display.
-    createInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    const VkPresentModeKHR newPresentMode =
+        ChoosePresentMode(info.PhysicalDevice, info.Surface, info.PreferredPresentMode);
+    if (newPresentMode != presentMode)
+    {
+        HYOSHI_LOG_INFO("Present mode: {}", GetPresentModeName(newPresentMode));
+        presentMode = newPresentMode;
+    }
+    createInfo.presentMode = presentMode;
     createInfo.clipped = VK_TRUE;
     createInfo.oldSwapchain = oldSwapchain;
 

@@ -49,6 +49,18 @@ constexpr float NS_PER_SECOND_F = 1.0e9f;
 // A long stall (debugger, window drag) must not teleport the demo sprites.
 constexpr float MAX_DELTA_SECONDS = 0.1f;
 
+// AppConfig::LowLatency caps frames at this many per refresh of the display (60 Hz if unknown).
+constexpr float LOW_LATENCY_FRAMES_PER_REFRESH = 4.0f;
+constexpr float DEFAULT_REFRESH_RATE = 60.0f;
+
+// Low latency applies on desktops: the web's frames come from the browser, and phones keep vsync
+// for their batteries.
+#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+constexpr bool CAN_LOWER_LATENCY = false;
+#else
+constexpr bool CAN_LOWER_LATENCY = true;
+#endif
+
 // Frame at which HYOSHI_SCREENSHOT is taken, late enough for the first swapchain images to settle.
 // HYOSHI_SCREENSHOT_FRAME overrides it.
 constexpr uint64_t DEFAULT_SCREENSHOT_FRAME = 30;
@@ -151,12 +163,34 @@ int Application::Run()
     std::optional<HostTimeNs> lastFrameTime;
     uint64_t frameCount = 0;
     uint32_t stressCycles = 0;
+    const bool isLowLatency = CAN_LOWER_LATENCY && config.LowLatency;
+    // HYOSHI_FRAME_CAP=141 caps frames at that many a second instead, on any desktop.
+    const std::optional<long long> frameCap = CAN_LOWER_LATENCY ? ReadPositiveEnv("HYOSHI_FRAME_CAP") : std::nullopt;
+    std::optional<HostTimeNs> nextFrameTime;
 
     while (!platform.IsQuitRequested())
     {
 #if defined(__EMSCRIPTEN__)
         WaitForAnimationFrame();
 #endif
+        // Immediate and mailbox don't hold frames back, so they're capped here, before the events are read so
+        // the frame starts with the newest input.
+        if (isLowLatency || frameCap)
+        {
+            const float displayRate = platform.GetRefreshRate();
+            const float refreshRate = displayRate > 0.0f ? displayRate : DEFAULT_REFRESH_RATE;
+            const float framesPerSecond =
+                frameCap ? static_cast<float>(*frameCap) : LOW_LATENCY_FRAMES_PER_REFRESH * refreshRate;
+            const auto period = static_cast<HostTimeNs>(NS_PER_SECOND_F / framesPerSecond);
+            if (nextFrameTime)
+            {
+                platform.SleepUntil(*nextFrameTime);
+            }
+            // On schedule, keep the cadence; after a long frame, start it again rather than rush.
+            const HostTimeNs current = platform.GetHostTimeNs();
+            const bool isOnSchedule = nextFrameTime && current - *nextFrameTime < period;
+            nextFrameTime = (isOnSchedule ? *nextFrameTime : current) + period;
+        }
         platform.PumpEvents();
 
         if (exitAfterMs && platform.GetHostTimeNs() - startTime >= *exitAfterMs * hyoshi::NS_PER_MS)
@@ -382,6 +416,29 @@ hyoshi::Result<void> Application::Initialize()
 
     hyoshi::rhi::DeviceConfig deviceConfig;
     deviceConfig.EnableValidation = ENABLE_VALIDATION;
+    deviceConfig.PreferredPresentMode =
+        CAN_LOWER_LATENCY && config.LowLatency ? hyoshi::rhi::PresentMode::Immediate : hyoshi::rhi::PresentMode::Fifo;
+    // HYOSHI_PRESENT_MODE tries another, to compare how they feel (with HYOSHI_FRAME_CAP).
+    if (const char* mode = std::getenv("HYOSHI_PRESENT_MODE"); mode != nullptr)
+    {
+        const std::string_view name = mode;
+        if (name == "fifo")
+        {
+            deviceConfig.PreferredPresentMode = hyoshi::rhi::PresentMode::Fifo;
+        }
+        else if (name == "mailbox")
+        {
+            deviceConfig.PreferredPresentMode = hyoshi::rhi::PresentMode::Mailbox;
+        }
+        else if (name == "immediate")
+        {
+            deviceConfig.PreferredPresentMode = hyoshi::rhi::PresentMode::Immediate;
+        }
+        else
+        {
+            HYOSHI_LOG_WARN("HYOSHI_PRESENT_MODE is fifo, mailbox, or immediate, not '{}'", name);
+        }
+    }
     if (!platform.GetUserDataPath().empty())
     {
         deviceConfig.PipelineCachePath = platform.GetUserDataPath() + "pipeline_cache.bin";

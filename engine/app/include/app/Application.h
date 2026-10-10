@@ -38,6 +38,11 @@ struct AppConfig
     std::string WindowIconPath;
     // The "Made with Hyoshi Engine" splash before the game's first scene.
     bool ShowSplash = true;
+    // Desktops: present each frame at once (immediate, tearing in fullscreen; mailbox where the GPU
+    // doesn't offer it) with the frame rate capped at four times the display's, rather than
+    // queueing frames behind vsync. Input reaches the screen a frame or more sooner, for a cursor the
+    // game draws itself; the GPU works harder.
+    bool LowLatency = false;
 };
 
 // The engine's systems, for a game and its scenes. They live as long as the Application.
