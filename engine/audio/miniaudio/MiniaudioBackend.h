@@ -13,8 +13,11 @@
 namespace hyoshi::audio
 {
 
+class AsioOutput;
+
 // DESIGN.md section 11.2: a playback-only miniaudio device at the device's native rate, mixed by
-// the engine's Mixer in the device callback. AAudio on Android, CoreAudio on Apple platforms.
+// the engine's Mixer in the device callback. AAudio on Android, CoreAudio on Apple platforms, and
+// on Windows WASAPI, or an ASIO driver (AudioConfig::AsioDriver) at its own rate.
 class MiniaudioBackend final : public IAudioBackend
 {
 public:
@@ -47,6 +50,7 @@ public:
     bool ConsumeRouteChangedFlag() override;
 
     AudioDeviceInfo GetDeviceInfo() const override;
+    bool ShowOutputSettings() override;
     AudioStats GetStats() const override;
     void ResetStats() override;
 
@@ -68,8 +72,14 @@ private:
     void Retire(std::unique_ptr<PcmBuffer> buffer);
     void RetireMusic();
     SoundHandle StartVoice(SoundId sound, Bus bus, DspFrame musicFrame, float volume);
+    Result<void> OpenAsio(const AudioConfig& config);
 
     std::unique_ptr<ma_device> device;
+#if defined(_WIN32)
+    // In the device's place.
+    std::unique_ptr<AsioOutput> asio;
+#endif
+    std::string fallbackReason;
     std::unique_ptr<Mixer> mixer;
     HostClockFn hostClock = nullptr;
     bool isDeviceStarted = false;

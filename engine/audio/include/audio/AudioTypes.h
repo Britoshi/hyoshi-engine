@@ -68,6 +68,9 @@ struct AudioConfig
     HostClockFn HostClock = nullptr;
     uint32_t PeriodMs = 10;
     uint32_t VoiceCount = 32;
+    // Windows: the ASIO driver to play through (ListAsioDrivers), at its own sample rate and buffer
+    // size, instead of the system's device. Empty, or a driver that won't open, uses the system's.
+    std::string AsioDriver;
 };
 
 struct AudioDeviceInfo
@@ -78,6 +81,8 @@ struct AudioDeviceInfo
     uint32_t DeviceSampleRate = 0;
     uint32_t PeriodFrames = 0;
     uint32_t PeriodCount = 0;
+    // Why the output AudioConfig asked for (an ASIO driver) isn't the one playing, or empty.
+    std::string FallbackReason;
 };
 
 // Counters for the debug panel. Read on the main thread.

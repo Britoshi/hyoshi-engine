@@ -1,6 +1,11 @@
 #include "MiniaudioBackend.h"
 
+#include "audio/Asio.h"
 #include "core/Log.h"
+
+#if defined(_WIN32)
+#include "AsioOutput.h"
+#endif
 
 #include <algorithm>
 #include <string>
@@ -32,7 +37,21 @@ void NotificationCallback(const ma_device_notification* notification)
     }
 }
 
+#if defined(_WIN32)
+void RenderAsio(void* backend, float* output, uint32_t frameCount)
+{
+    static_cast<MiniaudioBackend*>(backend)->OnData(output, frameCount);
+}
+#endif
+
 } // namespace
+
+#if !defined(_WIN32)
+std::vector<std::string> ListAsioDrivers()
+{
+    return {};
+}
+#endif
 
 MiniaudioBackend::MiniaudioBackend() = default;
 
@@ -48,6 +67,17 @@ Result<void> MiniaudioBackend::Initialize(const AudioConfig& config)
         return Error{"AudioConfig::HostClock is required"};
     }
     hostClock = config.HostClock;
+
+    if (!config.AsioDriver.empty())
+    {
+        Result<void> result = OpenAsio(config);
+        if (result)
+        {
+            return {};
+        }
+        fallbackReason = result.GetError().Message;
+        HYOSHI_LOG_WARN("Audio: {}; playing through the system's device instead", fallbackReason);
+    }
 
     // Sample rate 0 keeps the device's native rate, so the OS doesn't resample (and add latency).
     ma_device_config deviceConfig = ma_device_config_init(ma_device_type_playback);
@@ -86,8 +116,39 @@ Result<void> MiniaudioBackend::Initialize(const AudioConfig& config)
     return {};
 }
 
+Result<void> MiniaudioBackend::OpenAsio(const AudioConfig& config)
+{
+#if defined(_WIN32)
+    asio = std::make_unique<AsioOutput>();
+    if (Result<void> result = asio->Open(config.AsioDriver, &RenderAsio, this); !result)
+    {
+        asio.reset();
+        return result;
+    }
+    // As with a device: the mixer before the first callback.
+    mixer = std::make_unique<Mixer>(asio->GetSampleRate(), config.VoiceCount);
+    if (Result<void> result = asio->Start(); !result)
+    {
+        asio.reset();
+        mixer.reset();
+        return result;
+    }
+    isDeviceStarted = true;
+    const AudioDeviceInfo info = GetDeviceInfo();
+    HYOSHI_LOG_INFO("Audio: ASIO '{}', {} Hz, buffer {} frames, ~{:.1f} ms output latency", info.DeviceName,
+                    info.SampleRate, info.PeriodFrames, static_cast<double>(GetEstimatedOutputLatencyUs()) / 1000.0);
+    return {};
+#else
+    return Error{"ASIO is only on Windows, not for '" + config.AsioDriver + "'"};
+#endif
+}
+
 void MiniaudioBackend::Shutdown()
 {
+#if defined(_WIN32)
+    // Closing stops the driver, after which it calls back no more.
+    asio.reset();
+#endif
     if (device)
     {
         // Uninit stops the device and waits for the callback, after which every buffer is free.
@@ -108,6 +169,21 @@ void MiniaudioBackend::Update()
     {
         return;
     }
+#if defined(_WIN32)
+    // A new buffer size from the driver's control panel, for one.
+    if (asio && asio->ConsumeResetRequest())
+    {
+        if (Result<void> result = asio->Reset(); result)
+        {
+            HYOSHI_LOG_INFO("Audio: ASIO reset, buffer {} frames, ~{:.1f} ms output latency", asio->GetBufferFrames(),
+                            static_cast<double>(GetEstimatedOutputLatencyUs()) / 1000.0);
+        }
+        else
+        {
+            HYOSHI_LOG_ERROR("Audio: ASIO couldn't reset: {}", result.GetError().Message);
+        }
+    }
+#endif
 
     const int64_t applied = mixer->GetSnapshot().CommandsApplied;
     std::erase_if(retiredBuffers,
@@ -116,6 +192,14 @@ void MiniaudioBackend::Update()
 
 void MiniaudioBackend::Suspend()
 {
+#if defined(_WIN32)
+    if (asio)
+    {
+        asio->Stop();
+        isDeviceStarted = false;
+        return;
+    }
+#endif
     if (device && isDeviceStarted)
     {
         ma_device_stop(device.get());
@@ -125,6 +209,20 @@ void MiniaudioBackend::Suspend()
 
 void MiniaudioBackend::Resume()
 {
+#if defined(_WIN32)
+    if (asio)
+    {
+        if (Result<void> result = asio->Start(); result)
+        {
+            isDeviceStarted = true;
+        }
+        else
+        {
+            HYOSHI_LOG_ERROR("Could not restart ASIO: {}", result.GetError().Message);
+        }
+        return;
+    }
+#endif
     if (device && !isDeviceStarted)
     {
         if (const ma_result result = ma_device_start(device.get()); result != MA_SUCCESS)
@@ -282,6 +380,13 @@ AudioClockSnapshot MiniaudioBackend::GetClockSnapshot() const
 // rest.
 int64_t MiniaudioBackend::GetEstimatedOutputLatencyUs() const
 {
+#if defined(_WIN32)
+    // ASIO drivers report theirs: from a buffer switch until its first frame is heard.
+    if (asio)
+    {
+        return static_cast<int64_t>(asio->GetOutputLatencyFrames()) * US_PER_SECOND / asio->GetSampleRate();
+    }
+#endif
     if (!device || device->playback.internalSampleRate == 0)
     {
         return 0;
@@ -299,6 +404,19 @@ bool MiniaudioBackend::ConsumeRouteChangedFlag()
 AudioDeviceInfo MiniaudioBackend::GetDeviceInfo() const
 {
     AudioDeviceInfo info;
+    info.FallbackReason = fallbackReason;
+#if defined(_WIN32)
+    if (asio)
+    {
+        info.BackendName = "ASIO";
+        info.DeviceName = asio->GetDriverName();
+        info.SampleRate = asio->GetSampleRate();
+        info.DeviceSampleRate = asio->GetSampleRate();
+        info.PeriodFrames = asio->GetBufferFrames();
+        info.PeriodCount = 2;
+        return info;
+    }
+#endif
     if (!device)
     {
         return info;
@@ -310,6 +428,15 @@ AudioDeviceInfo MiniaudioBackend::GetDeviceInfo() const
     info.PeriodFrames = device->playback.internalPeriodSizeInFrames;
     info.PeriodCount = device->playback.internalPeriods;
     return info;
+}
+
+bool MiniaudioBackend::ShowOutputSettings()
+{
+#if defined(_WIN32)
+    return asio && asio->ShowControlPanel();
+#else
+    return false;
+#endif
 }
 
 AudioStats MiniaudioBackend::GetStats() const

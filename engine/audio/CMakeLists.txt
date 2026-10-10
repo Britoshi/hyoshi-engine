@@ -14,6 +14,13 @@ target_link_libraries(hyoshi_audio
     PRIVATE hyoshi_miniaudio
 )
 
+# ASIO drivers (Windows) are COM objects found in the registry.
+if(WIN32)
+    target_sources(hyoshi_audio PRIVATE asio/AsioOutput.cpp)
+    target_include_directories(hyoshi_audio PRIVATE asio)
+    target_link_libraries(hyoshi_audio PRIVATE ole32 advapi32 user32)
+endif()
+
 # miniaudio loads AAudio and OpenSL ES at runtime on Android; Apple frameworks are linked directly.
 if(APPLE)
     target_link_libraries(hyoshi_audio PRIVATE "-framework CoreFoundation" "-framework CoreAudio"

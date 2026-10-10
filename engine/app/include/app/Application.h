@@ -63,6 +63,13 @@ class Game
 public:
     virtual ~Game() = default;
 
+    // Once the window is up, before audio starts: where it plays (AudioConfig::AsioDriver), for a
+    // game that keeps that in its settings, which it can read here.
+    virtual void ConfigureAudio([[maybe_unused]] platform::Platform& platform,
+                                [[maybe_unused]] audio::AudioConfig& config)
+    {
+    }
+
     // Once the window, the GPU, and audio are up: read settings, start loading content.
     virtual Result<void> Initialize(AppServices& services) = 0;
 

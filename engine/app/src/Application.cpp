@@ -485,6 +485,7 @@ hyoshi::Result<void> Application::Initialize()
     audio = hyoshi::audio::CreateAudioBackend();
     hyoshi::audio::AudioConfig audioConfig;
     audioConfig.HostClock = &hyoshi::platform::ReadHostClock;
+    game.ConfigureAudio(platform, audioConfig);
     if (Result<void> result = audio->Initialize(audioConfig); result)
     {
         services = std::make_unique<AppServices>(AppServices{platform, *device, *audio, jobs, editorLayer != nullptr});

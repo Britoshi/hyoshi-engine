@@ -62,6 +62,9 @@ public:
     virtual bool ConsumeRouteChangedFlag() = 0;
 
     virtual AudioDeviceInfo GetDeviceInfo() const = 0;
+    // Opens the output's own settings window (an ASIO driver's control panel, for its buffer size).
+    // False where there's none.
+    virtual bool ShowOutputSettings() = 0;
     virtual AudioStats GetStats() const = 0;
     virtual void ResetStats() = 0;
 };
