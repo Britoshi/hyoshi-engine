@@ -72,9 +72,12 @@ constexpr Color BODY_BORDER{99, 99, 99, 255};
 constexpr Color BODY_FILL{55, 55, 55, 255};
 constexpr float BODY_FILL_SCALE = 0.84f;
 constexpr float ARROW_SIZE = 0.5f;
-// The follow circle around a held slider's ball.
+// Slider ticks: dots on the body, a fraction of a note's size.
+constexpr float TICK_SIZE = 0.16f;
+constexpr Color TICK_TINT{255, 255, 255, 230};
+// The follow circle around a followed slider's ball: as far as following reaches.
 constexpr Color FOLLOW_CIRCLE_TINT{255, 255, 255, 140};
-constexpr float FOLLOW_CIRCLE_SCALE = 2.0f;
+constexpr float FOLLOW_CIRCLE_SCALE = FOLLOW_RADIUS_SCALE;
 constexpr Color SPINNER_TINT{255, 255, 255, 170};
 constexpr float SPINNER_SIZE = 0.8f * PLAYFIELD_HEIGHT;
 
@@ -205,8 +208,7 @@ float GetNoteAlpha(const CircleNote& note, SongTimeUs time, SongTimeUs approachU
 
 bool IsStruck(const CircleJudge& judge, uint32_t note)
 {
-    const NoteState state = judge.GetNoteState(note);
-    return state == NoteState::Hit || state == NoteState::Held;
+    return judge.GetNoteState(note) == NoteState::Hit;
 }
 
 glm::vec2 GetHeadPosition(const CircleChart& chart, const CircleNote& note)
@@ -375,9 +377,18 @@ void CirclePlayfield::Reset(const CircleChart& chart)
 
 void CirclePlayfield::OnJudgment(const rhythm::JudgmentEvent& event)
 {
-    if (event.NoteIndex < feedback.size())
+    // A circle's result (part 0), or a slider head's (part 1): a pop where it was struck, and the
+    // mark.
+    if (event.NoteIndex >= feedback.size() || event.Part > 1)
     {
-        feedback[event.NoteIndex] = {event.Time, event.Result};
+        return;
+    }
+    Feedback& note = feedback[event.NoteIndex];
+    note.Time = event.Time;
+    note.Result = event.Result;
+    if (event.Result != Judgment::Miss)
+    {
+        note.PopTime = event.Time;
     }
 }
 
@@ -554,6 +565,7 @@ void CirclePlayfield::DrawSliderBody(const Frame& frame, uint32_t index) const
         }
         frame.DrawShape(Shape::Disc, endPosition, size, tint, BODY_LAYER);
     }
+    DrawTicks(frame, index, start, end);
 
     // Reverse arrows at the ends the ball has yet to turn back from.
     const uint32_t passes = std::max<uint32_t>(note.Passes, 1);
@@ -610,7 +622,7 @@ void CirclePlayfield::DrawSliderBall(const Frame& frame, uint32_t index) const
     frame.DrawShape(Shape::Disc, ball, frame.Diameter, BODY_BORDER, NOTE_LAYER);
     frame.DrawShape(Shape::Ring, ball, frame.Diameter, NOTE_TINT, NOTE_LAYER);
     frame.DrawShape(Shape::Ring, ball, frame.Diameter * 0.8f, NOTE_TINT, NOTE_LAYER);
-    if (frame.Judge.GetNoteState(index) == NoteState::Held)
+    if (frame.Judge.IsFollowing(index))
     {
         frame.DrawShape(Shape::Ring, ball, frame.Diameter * FOLLOW_CIRCLE_SCALE, FOLLOW_CIRCLE_TINT, NOTE_LAYER);
     }
@@ -645,22 +657,58 @@ void CirclePlayfield::DrawSpinner(const Frame& frame, uint32_t index) const
     frame.DrawShape(Shape::Disc, note.Position, frame.Diameter * 0.25f, WithAlpha(SPINNER_TINT, alpha), BODY_LAYER);
 }
 
+// The ticks the ball has yet to reach on its current pass (before it starts, the first), on the
+// part of the body that's drawn (from start to end along the path).
+void CirclePlayfield::DrawTicks(const Frame& frame, uint32_t index, float start, float end) const
+{
+    const CircleNote& note = frame.Chart.Notes[index];
+    const uint32_t passes = std::max<uint32_t>(note.Passes, 1);
+    const SongTimeUs span = note.EndTime - note.Time;
+    if (span <= 0)
+    {
+        return;
+    }
+    const SongTimeUs lastPass = static_cast<SongTimeUs>(passes) - 1;
+    const SongTimeUs pass = std::clamp<SongTimeUs>((frame.Time - note.Time) * passes / span, 0, lastPass);
+    for (uint32_t i = 0; i < note.PartCount; ++i)
+    {
+        const SliderPart& part = frame.Chart.SliderParts[note.FirstPart + i];
+        if (part.Type != SliderPartType::Tick || part.Time <= frame.Time)
+        {
+            continue;
+        }
+        const SongTimeUs partPass = std::min((part.Time - note.Time) * passes / span, lastPass);
+        if (partPass > pass)
+        {
+            break;
+        }
+        if (part.Progress >= start && part.Progress <= end)
+        {
+            frame.DrawShape(Shape::Disc, GetPathPosition(frame.Chart, note, part.Progress), frame.Diameter * TICK_SIZE,
+                            TICK_TINT, BODY_LAYER);
+        }
+    }
+}
+
 void CirclePlayfield::DrawFeedback(const Frame& frame, uint32_t index) const
 {
     const Feedback& result = feedback[index];
+    const CircleNote& note = frame.Chart.Notes[index];
+    const SongTimeUs popAge = frame.Time - result.PopTime;
+    if (result.PopTime != INT64_MIN && popAge >= 0 && popAge < POP_US)
+    {
+        const float grown = Ratio(popAge, POP_US);
+        frame.DrawShape(Shape::HitCircle, GetHeadPosition(frame.Chart, note),
+                        frame.Diameter * (1.0f + (POP_GROWTH * grown)), WithAlpha(NOTE_TINT, 1.0f - grown),
+                        FEEDBACK_LAYER);
+    }
+
     const SongTimeUs age = frame.Time - result.Time;
     if (result.Time == INT64_MIN || age < 0 || age >= MARK_US)
     {
         return;
     }
-    const glm::vec2 head = GetHeadPosition(frame.Chart, frame.Chart.Notes[index]);
-    if (result.Result != Judgment::Miss && age < POP_US)
-    {
-        const float grown = Ratio(age, POP_US);
-        frame.DrawShape(Shape::HitCircle, head, frame.Diameter * (1.0f + (POP_GROWTH * grown)),
-                        WithAlpha(NOTE_TINT, 1.0f - grown), FEEDBACK_LAYER);
-    }
-
+    const glm::vec2 head = GetHeadPosition(frame.Chart, note);
     const float alpha = 1.0f - Ratio(age, MARK_US);
     const float size = frame.Diameter * MARK_SIZE;
     const Color tint = WithAlpha(GetMarkTint(result.Result), alpha);

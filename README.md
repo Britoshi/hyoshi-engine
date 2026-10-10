@@ -29,7 +29,7 @@ It renders with Vulkan (MoltenVK on macOS) and uses SDL3 for windowing and input
 
 - **Audio-driven timing.** `SongClock` follows the audio device's playback position. It never runs backwards, and it recovers from device stalls and seeks.
 - **Deterministic judgment and replays.** Judgment depends only on the chart and the timestamped inputs, so a replay reproduces the original run exactly.
-- **Game modes as modules.** Mania (vertical lanes, like osu!mania) and Circle (hit circles, sliders, and spinners, like osu!standard), each with a judge, scoring, autoplay, and a playfield renderer.
+- **Game modes as modules.** Mania (vertical lanes, like osu!mania) and Circle (hit circles, sliders, and spinners, like osu!standard, with its hit sounds), each with a judge, scoring, autoplay, and a playfield renderer.
 - **osu! map import.** osu!mania and osu!standard `.osu` files load directly. `hyoshi-osu-import` converts osu!mania maps to Hyoshi's JSON chart format.
 - **2D renderer.** Sprite batching, distance-field text for any TrueType or OpenType font (including Japanese), safe areas, and Android screen rotation.
 - **Audio.** WAV, MP3, FLAC, and Ogg Vorbis. Music streams from the file instead of being decoded whole first, so a song is ready to play in milliseconds; short sounds are preloaded and scheduled to exact sample positions in the music, and a mixer runs in the audio callback.
@@ -255,8 +255,7 @@ Each engine module is a CMake target named `hyoshi::<module>`. `hyoshi::engine` 
 - Fix the Vulkan validation errors on macOS.
 - Test on Android phones: touch, display cutouts, performance, and real audio latency.
 - Continuous integration for macOS and Windows.
-- Circle mode: slider ticks, repeats, and follow judgment; spinner judgment.
-- Precise keyboard timestamps on Windows.
+- Circle mode: spinner judgment, and sliders' slide sounds.
 - An audio offset calibration screen, with offsets saved per output device.
 - A chart editor built on the editor framework.
 - More game modes: Drum, Highway, and Line.

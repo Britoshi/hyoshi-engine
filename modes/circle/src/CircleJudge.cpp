@@ -19,6 +19,11 @@ constexpr SongTimeUs SCAN_AHEAD_US = 1'000'000;
 constexpr SongTimeUs AUTOPLAY_RELEASE_US = 30'000;
 constexpr SongTimeUs AUTOPLAY_MOVE_STEP_US = 16'000;
 
+// A slider's head is part 1, judged by a press or a miss. The parts after it are judged by
+// following, in turn.
+constexpr uint32_t HEAD_PART = 1;
+constexpr uint32_t FIRST_FOLLOWED_PART = 2;
+
 bool IsSameTime(const CircleNote& a, const CircleNote& b)
 {
     return std::abs(a.Time - b.Time) <= CHORD_TOLERANCE_US;
@@ -53,13 +58,17 @@ void CircleJudge::Reset(const CircleChart& circleChart)
     chart = &circleChart;
     windows = chart->Difficulty.GetWindows();
     radius = chart->Difficulty.GetRadius();
-    states.assign(chart->Notes.size(), NoteState::Pending);
-    finished.assign(chart->Notes.size(), false);
+    const size_t count = chart->Notes.size();
+    states.assign(count, NoteState::Pending);
+    finished.assign(count, false);
+    started.assign(count, false);
+    following.assign(count, false);
+    nextPart.assign(count, FIRST_FOLLOWED_PART);
     pointers.clear();
     time = INT64_MIN;
     firstActive = 0;
     unfinishedNotes = 0;
-    for (size_t i = 0; i < chart->Notes.size(); ++i)
+    for (size_t i = 0; i < count; ++i)
     {
         // Spinners aren't judged, so they're finished from the start.
         if (chart->Notes[i].Type == NoteType::Spinner)
@@ -79,66 +88,114 @@ void CircleJudge::Advance(SongTimeUs target, std::vector<rhythm::JudgmentEvent>&
     {
         return;
     }
+    while (const std::optional<Check> check = FindNextCheck(target))
+    {
+        RunCheck(*check, events);
+        AdvanceFirstActive();
+    }
     time = target;
-    const std::vector<CircleNote>& notes = chart->Notes;
-
-    // Misses, in time order: the first note still inside its window ends the walk.
-    for (uint32_t i = firstActive; i < notes.size(); ++i)
-    {
-        if (time - notes[i].Time <= windows.MehUs)
-        {
-            break;
-        }
-        if (states[i] == NoteState::Pending && notes[i].Type != NoteType::Spinner)
-        {
-            // Stamped with the moment it became a miss, which doesn't depend on when it was noticed.
-            Judge(i, rhythm::Judgment::Miss, 0, NoteState::Missed, notes[i].Time + windows.MehUs + 1, events);
-        }
-    }
-
-    // A slider is let go once it ends.
-    for (Pointer& pointer : pointers)
-    {
-        if (pointer.HeldSlider && time > notes[*pointer.HeldSlider].EndTime)
-        {
-            states[*pointer.HeldSlider] = NoteState::Hit;
-            pointer.HeldSlider.reset();
-        }
-    }
-
-    // Everything before firstActive is judged and past its window, so no press can reach it.
-    while (firstActive < notes.size())
-    {
-        const CircleNote& note = notes[firstActive];
-        const bool isPast = time > std::max(note.EndTime, note.Time) + windows.MehUs;
-        if (!isPast || (note.Type != NoteType::Spinner && !IsResolved(firstActive)))
-        {
-            break;
-        }
-        ++firstActive;
-    }
+    AdvanceFirstActive();
 }
 
 void CircleJudge::ProcessAction(const rhythm::GameplayAction& action, std::vector<rhythm::JudgmentEvent>& events)
 {
     Advance(action.Time, events);
     const glm::vec2 position = GetActionPosition(action);
+    Pointer& pointer = GetPointer(action.Index);
     switch (static_cast<CircleAction>(action.Type))
     {
     case CircleAction::Press:
         Press(action.Index, position, events);
         break;
     case CircleAction::Release:
-        GetPointer(action.Index).Position = position;
-        Release(action.Index);
+        pointer.Position = position;
+        pointer.IsDown = false;
         break;
     case CircleAction::Move:
-        GetPointer(action.Index).Position = position;
+        pointer.Position = position;
         break;
+    }
+    UpdateFollowingAll();
+}
+
+// The earliest check due by `limit`: by time, then by note. Every check of a note comes at or
+// after its time, so the scan stops at the first note after the limit.
+std::optional<CircleJudge::Check> CircleJudge::FindNextCheck(SongTimeUs limit) const
+{
+    const std::vector<CircleNote>& notes = chart->Notes;
+    std::optional<Check> next;
+    const auto consider = [&](SongTimeUs at, uint32_t note, CheckType type)
+    {
+        if (at <= limit && (!next || at < next->Time))
+        {
+            next = Check{at, note, type};
+        }
+    };
+    for (uint32_t i = firstActive; i < notes.size() && notes[i].Time <= limit; ++i)
+    {
+        const CircleNote& note = notes[i];
+        if (finished[i])
+        {
+            continue;
+        }
+        if (!IsResolved(i))
+        {
+            consider(note.Time + windows.MehUs + 1, i, CheckType::Miss);
+        }
+        if (note.Type != NoteType::Slider)
+        {
+            continue;
+        }
+        if (!started[i])
+        {
+            consider(note.Time, i, CheckType::SliderStart);
+        }
+        // The parts after the head wait for it to be judged, as lazer's do.
+        else if (const SliderPart* part = GetSliderPart(*chart, i, nextPart[i]); part != nullptr && IsResolved(i))
+        {
+            consider(part->JudgeTime, i, CheckType::SliderPart);
+        }
+    }
+    return next;
+}
+
+void CircleJudge::RunCheck(const Check& check, std::vector<rhythm::JudgmentEvent>& events)
+{
+    time = std::max(time, check.Time);
+    switch (check.Type)
+    {
+    case CheckType::Miss:
+        // Stamped with the moment it became a miss, which doesn't depend on when it was noticed.
+        if (chart->Notes[check.Note].Type == NoteType::Slider)
+        {
+            states[check.Note] = NoteState::Missed;
+            JudgePart(check.Note, HEAD_PART, rhythm::Judgment::Miss, 0, true, check.Time, events);
+            FinishSlider(check.Note);
+        }
+        else
+        {
+            Judge(check.Note, rhythm::Judgment::Miss, 0, NoteState::Missed, check.Time, events);
+        }
+        break;
+    case CheckType::SliderStart:
+        started[check.Note] = true;
+        UpdateFollowing(check.Note, check.Time);
+        break;
+    case CheckType::SliderPart:
+    {
+        // A part held back for the head's miss is judged by following now.
+        const uint32_t part = nextPart[check.Note]++;
+        const SliderPart& sliderPart = *GetSliderPart(*chart, check.Note, part);
+        UpdateFollowing(check.Note, time);
+        JudgePart(check.Note, part, following[check.Note] ? rhythm::Judgment::Great : rhythm::Judgment::Miss, 0, false,
+                  std::max(sliderPart.Time, time), events);
+        FinishSlider(check.Note);
+        break;
+    }
     }
 }
 
-std::optional<CircleJudge::Target> CircleJudge::FindTarget(glm::vec2 position, bool canTakeSlider) const
+std::optional<CircleJudge::Target> CircleJudge::FindTarget(glm::vec2 position) const
 {
     const std::vector<CircleNote>& notes = chart->Notes;
     for (uint32_t i = firstActive; i < notes.size(); ++i)
@@ -164,7 +221,7 @@ std::optional<CircleJudge::Target> CircleJudge::FindTarget(glm::vec2 position, b
         }
         else
         {
-            if (!canTakeSlider || time > note.EndTime || note.PathPointCount < 2)
+            if (time > note.EndTime || note.PathPointCount < 2)
             {
                 continue;
             }
@@ -195,8 +252,7 @@ void CircleJudge::Press(uint32_t pointerIndex, glm::vec2 position, std::vector<r
     pointer.Position = position;
     pointer.IsDown = true;
 
-    // A pointer follows one slider at a time.
-    const std::optional<Target> target = FindTarget(position, !pointer.HeldSlider);
+    const std::optional<Target> target = FindTarget(position);
     // A blocked press is spent: nothing is judged.
     if (!target || target->IsBlocked)
     {
@@ -208,23 +264,14 @@ void CircleJudge::Press(uint32_t pointerIndex, glm::vec2 position, std::vector<r
     const int64_t errorUs = time - note.Time;
     if (note.Type == NoteType::Slider)
     {
-        Judge(target->Note, rhythm::Judgment::Great, errorUs, NoteState::Held, time, events);
-        pointer.HeldSlider = target->Note;
+        states[target->Note] = NoteState::Hit;
+        JudgePart(target->Note, HEAD_PART, windows.Classify(errorUs), errorUs, true, time, events);
+        JudgePassedParts(target->Note, position, events);
+        FinishSlider(target->Note);
     }
     else
     {
         Judge(target->Note, windows.Classify(errorUs), errorUs, NoteState::Hit, time, events);
-    }
-}
-
-void CircleJudge::Release(uint32_t pointerIndex)
-{
-    Pointer& pointer = GetPointer(pointerIndex);
-    pointer.IsDown = false;
-    if (pointer.HeldSlider)
-    {
-        states[*pointer.HeldSlider] = NoteState::Hit;
-        pointer.HeldSlider.reset();
     }
 }
 
@@ -257,12 +304,96 @@ void CircleJudge::Judge(uint32_t note, rhythm::Judgment result, int64_t errorUs,
     Finish(note);
 }
 
+void CircleJudge::JudgePart(uint32_t note, uint32_t part, rhythm::Judgment result, int64_t errorUs, bool isTimed,
+                            SongTimeUs eventTime, std::vector<rhythm::JudgmentEvent>& events)
+{
+    rhythm::JudgmentEvent event;
+    event.NoteIndex = note;
+    event.Part = part;
+    event.Result = result;
+    event.ErrorUs = result == rhythm::Judgment::Miss ? 0 : errorUs;
+    event.IsTimed = isTimed;
+    event.Time = eventTime;
+    events.push_back(event);
+}
+
+// lazer's SliderInputManager.PostProcessHeadJudgement: a head struck late judges the parts the
+// ball has already passed, in order, by where the press was: hit while within the follow area of
+// each, and once one is out of reach, it and the rest are missed.
+void CircleJudge::JudgePassedParts(uint32_t note, glm::vec2 position, std::vector<rhythm::JudgmentEvent>& events)
+{
+    const CircleNote& slider = chart->Notes[note];
+    const float reach = radius * FOLLOW_RADIUS_SCALE;
+    bool isInReach = true;
+    for (const SliderPart* part = GetSliderPart(*chart, note, nextPart[note]);
+         part != nullptr && part->JudgeTime <= time; part = GetSliderPart(*chart, note, nextPart[note]))
+    {
+        isInReach = isInReach && glm::distance(position, GetPathPosition(*chart, slider, part->Progress)) <= reach;
+        JudgePart(note, nextPart[note]++, isInReach ? rhythm::Judgment::Great : rhythm::Judgment::Miss, 0, false, time,
+                  events);
+    }
+}
+
+// Once its head and every other part are judged. The slider itself has no result of its own.
+void CircleJudge::FinishSlider(uint32_t note)
+{
+    if (IsResolved(note) && nextPart[note] > chart->Notes[note].PartCount)
+    {
+        Finish(note);
+    }
+}
+
+bool CircleJudge::IsFollowedAt(uint32_t note, SongTimeUs at) const
+{
+    const CircleNote& slider = chart->Notes[note];
+    if (at < slider.Time || at > slider.EndTime)
+    {
+        return false;
+    }
+    const glm::vec2 ball = GetBallPosition(*chart, slider, at);
+    const float reach = following[note] ? radius * FOLLOW_RADIUS_SCALE : radius;
+    return std::any_of(pointers.begin(), pointers.end(), [&](const Pointer& pointer)
+                       { return pointer.IsDown && glm::distance(pointer.Position, ball) <= reach; });
+}
+
+void CircleJudge::UpdateFollowing(uint32_t note, SongTimeUs at)
+{
+    following[note] = started[note] && IsFollowedAt(note, at);
+}
+
+void CircleJudge::UpdateFollowingAll()
+{
+    const std::vector<CircleNote>& notes = chart->Notes;
+    for (uint32_t i = firstActive; i < notes.size() && notes[i].Time <= time; ++i)
+    {
+        if (notes[i].Type == NoteType::Slider && started[i])
+        {
+            UpdateFollowing(i, time);
+        }
+    }
+}
+
 void CircleJudge::Finish(uint32_t note)
 {
     if (!finished[note])
     {
         finished[note] = true;
         --unfinishedNotes;
+    }
+}
+
+// Everything before firstActive is finished and past its window, so no press can reach it.
+void CircleJudge::AdvanceFirstActive()
+{
+    const std::vector<CircleNote>& notes = chart->Notes;
+    while (firstActive < notes.size())
+    {
+        const CircleNote& note = notes[firstActive];
+        if (time <= std::max(note.EndTime, note.Time) + windows.MehUs || !finished[firstActive])
+        {
+            break;
+        }
+        ++firstActive;
     }
 }
 
@@ -277,44 +408,54 @@ CircleJudge::Pointer& CircleJudge::GetPointer(uint32_t pointer)
 
 std::vector<rhythm::GameplayAction> MakeAutoplayActions(const CircleChart& chart)
 {
-    struct Strike
-    {
-        uint32_t Note;
-        uint32_t Pointer;
-    };
-    std::vector<Strike> strikes;
+    std::vector<rhythm::GameplayAction> actions;
+    // When each pointer lets go. It can take a note after that.
+    std::vector<SongTimeUs> busyUntil;
     for (uint32_t i = 0; i < chart.Notes.size(); ++i)
     {
-        if (chart.Notes[i].Type != NoteType::Spinner)
+        const CircleNote& note = chart.Notes[i];
+        if (note.Type == NoteType::Spinner)
         {
-            strikes.push_back({i, static_cast<uint32_t>(strikes.size() % 2)});
+            continue;
         }
-    }
+        uint32_t pointer = 0;
+        while (pointer < busyUntil.size() && busyUntil[pointer] >= note.Time)
+        {
+            ++pointer;
+        }
+        if (pointer == busyUntil.size())
+        {
+            busyUntil.push_back(INT64_MIN);
+        }
 
-    std::vector<rhythm::GameplayAction> actions;
-    for (size_t s = 0; s < strikes.size(); ++s)
-    {
-        const CircleNote& note = chart.Notes[strikes[s].Note];
-        const uint32_t pointer = strikes[s].Pointer;
         const bool isSlider = note.Type == NoteType::Slider;
         const glm::vec2 head = isSlider ? GetPathPosition(chart, note, 0.0f) : note.GetStackedPosition();
         actions.push_back(MakeAction(CircleAction::Press, pointer, head, note.Time));
-
-        SongTimeUs release = isSlider ? note.EndTime : note.Time + AUTOPLAY_RELEASE_US;
-        if (isSlider)
+        if (!isSlider)
         {
-            for (SongTimeUs t = note.Time + AUTOPLAY_MOVE_STEP_US; t < note.EndTime; t += AUTOPLAY_MOVE_STEP_US)
-            {
-                actions.push_back(MakeAction(CircleAction::Move, pointer, GetBallPosition(chart, note, t), t));
-            }
+            busyUntil[pointer] = note.Time + AUTOPLAY_RELEASE_US;
+            actions.push_back(MakeAction(CircleAction::Release, pointer, head, busyUntil[pointer]));
+            continue;
         }
-        // Let go before this pointer's next press.
-        if (s + 2 < strikes.size())
+        // Along with the ball, and onto it whenever a part is judged.
+        std::vector<SongTimeUs> moves;
+        for (SongTimeUs t = note.Time + AUTOPLAY_MOVE_STEP_US; t < note.EndTime; t += AUTOPLAY_MOVE_STEP_US)
         {
-            release = std::min(release, chart.Notes[strikes[s + 2].Note].Time - 1);
+            moves.push_back(t);
         }
-        const glm::vec2 end = isSlider ? GetBallPosition(chart, note, release) : head;
-        actions.push_back(MakeAction(CircleAction::Release, pointer, end, std::max(release, note.Time)));
+        for (uint32_t part = FIRST_FOLLOWED_PART; part <= note.PartCount; ++part)
+        {
+            moves.push_back(GetSliderPart(chart, i, part)->JudgeTime);
+        }
+        std::sort(moves.begin(), moves.end());
+        moves.erase(std::unique(moves.begin(), moves.end()), moves.end());
+        for (const SongTimeUs t : moves)
+        {
+            actions.push_back(MakeAction(CircleAction::Move, pointer, GetBallPosition(chart, note, t), t));
+        }
+        busyUntil[pointer] = note.EndTime;
+        actions.push_back(
+            MakeAction(CircleAction::Release, pointer, GetBallPosition(chart, note, note.EndTime), note.EndTime));
     }
     std::stable_sort(actions.begin(), actions.end(),
                      [](const rhythm::GameplayAction& a, const rhythm::GameplayAction& b) { return a.Time < b.Time; });

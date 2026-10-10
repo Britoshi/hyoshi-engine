@@ -52,9 +52,10 @@ struct CirclePlayfieldStyle
 };
 
 // Draws a circle chart with SpriteBatch (DESIGN.md section 16.4):
-// circles with combo numbers and shrinking approach circles; sliders that snake in, carry a ball,
-// and shrink behind it on their last pass, with reverse arrows; follow points; a pop where a note
-// is struck and a mark with the result; and spinners as a ring that empties over their length.
+// circles with combo numbers and shrinking approach circles; sliders that snake in, carry a ball
+// (in its follow circle while it's followed), and shrink behind it on their last pass, with reverse
+// arrows and ticks; follow points; a pop where a note or a slider's head is struck, and a mark
+// with its result; and spinners as a ring that empties over their length.
 //
 // Notes are drawn latest first, so the next note is always on top. Slider bodies go below every
 // circle. The playfield's shapes are generated at load, not skinned.
@@ -69,7 +70,7 @@ public:
     // Call before playing a chart, and again to restart it.
     void Reset(const CircleChart& chart);
 
-    // Call for every judgment event, for the pops and result marks.
+    // Call for every judgment event, slider parts' too, for the pops and result marks.
     void OnJudgment(const rhythm::JudgmentEvent& event);
 
     // `time` is the visual song time.
@@ -91,6 +92,9 @@ private:
 
     struct Feedback
     {
+        // The pop where it was struck.
+        SongTimeUs PopTime = INT64_MIN;
+        // The result mark.
         SongTimeUs Time = INT64_MIN;
         rhythm::Judgment Result = rhythm::Judgment::Miss;
     };
@@ -106,6 +110,7 @@ private:
     void DrawFollowPoints(const Frame& frame);
     void DrawSliderBody(const Frame& frame, uint32_t note) const;
     void DrawHead(const Frame& frame, uint32_t note) const;
+    void DrawTicks(const Frame& frame, uint32_t note, float start, float end) const;
     void DrawSliderBall(const Frame& frame, uint32_t note) const;
     void DrawApproach(const Frame& frame, uint32_t note) const;
     void DrawSpinner(const Frame& frame, uint32_t note) const;

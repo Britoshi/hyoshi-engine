@@ -6,6 +6,7 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -21,6 +22,9 @@ using hyoshi::circle::CurveType;
 using hyoshi::circle::MakeAction;
 using hyoshi::circle::NoteState;
 using hyoshi::circle::NoteType;
+using hyoshi::circle::SampleBank;
+using hyoshi::circle::SliderPart;
+using hyoshi::circle::SliderPartType;
 using hyoshi::rhythm::GameplayAction;
 using hyoshi::rhythm::Judgment;
 using hyoshi::rhythm::JudgmentEvent;
@@ -141,7 +145,8 @@ bool SameEvents(const std::vector<JudgmentEvent>& a, const std::vector<JudgmentE
     for (size_t i = 0; i < a.size(); ++i)
     {
         if (a[i].NoteIndex != b[i].NoteIndex || a[i].Result != b[i].Result || a[i].ErrorUs != b[i].ErrorUs ||
-            a[i].Time != b[i].Time || a[i].IsTail != b[i].IsTail)
+            a[i].Time != b[i].Time || a[i].IsTail != b[i].IsTail || a[i].Part != b[i].Part ||
+            a[i].IsTimed != b[i].IsTimed)
         {
             return false;
         }
@@ -157,6 +162,31 @@ GameplayAction Press(SongTimeUs time, glm::vec2 position, uint32_t pointer = 0)
 GameplayAction Release(SongTimeUs time, glm::vec2 position, uint32_t pointer = 0)
 {
     return MakeAction(CircleAction::Release, pointer, position, time);
+}
+
+GameplayAction Move(SongTimeUs time, glm::vec2 position, uint32_t pointer = 0)
+{
+    return MakeAction(CircleAction::Move, pointer, position, time);
+}
+
+// Graded results: one per circle and slider head, the timed events.
+size_t CountResults(const std::vector<JudgmentEvent>& events)
+{
+    return static_cast<size_t>(
+        std::count_if(events.begin(), events.end(), [](const JudgmentEvent& event) { return event.IsTimed; }));
+}
+
+// lazer's standardised score from the combo portions and accuracy.
+int64_t StandardisedScore(double comboPortion, double maxComboPortion, double accuracy, double progress)
+{
+    return std::llround((700'000.0 * comboPortion / maxComboPortion) + (300'000.0 * std::pow(accuracy, 10) * progress));
+}
+
+void CheckPart(const JudgmentEvent& event, uint32_t note, uint32_t part, Judgment result)
+{
+    CHECK(event.NoteIndex == note);
+    CHECK(event.Part == part);
+    CHECK(event.Result == result);
 }
 
 void CheckNear(glm::vec2 actual, glm::vec2 expected)
@@ -235,6 +265,9 @@ TEST_CASE("osu!standard import: notes, combos, sliders, timing, and metadata")
     // The note after a spinner starts a combo even without the bit.
     CHECK(chart.Notes[5].IsNewCombo);
     CHECK(chart.GetJudgmentCount() == 5);
+    // Three circles, a slider's head and tail, and the other's head, repeat, and tail. At 100
+    // units a tick, neither slider is long enough for one.
+    CHECK(chart.GetMaxCombo() == 8);
 
     // 100 units at 100 units a beat: one beat at 120 BPM.
     const CircleNote& slider = chart.Notes[2];
@@ -411,7 +444,7 @@ TEST_CASE("Circle judge: chords don't block or miss each other")
     CHECK(events[1].Result == Judgment::Great);
 }
 
-TEST_CASE("Circle judge: a press takes the earliest note under it, and sliders are held until they end")
+TEST_CASE("Circle judge: a press takes the earliest note under it, even while another pointer follows")
 {
     // A slider and a circle on its head a moment later (stacking off), then a second slider during
     // the first.
@@ -426,35 +459,277 @@ TEST_CASE("Circle judge: a press takes the earliest note under it, and sliders a
     FinishCircleChart(chart);
     // The first slider ends last.
     CHECK(chart.GetEndTime() == 1'500'000);
+    // Without ticks, a head and a tail each.
+    CHECK(chart.GetMaxCombo() == 5);
 
     CircleJudge judge;
     judge.Reset(chart);
     std::vector<JudgmentEvent> events;
     judge.ProcessAction(Press(1'000'000, {200.0f, 200.0f}), events);
     REQUIRE(events.size() == 1);
-    CHECK(events[0].NoteIndex == 0);
-    CHECK(events[0].Result == Judgment::Great);
-    CHECK(judge.GetNoteState(0) == NoteState::Held);
+    CheckPart(events[0], 0, 1, Judgment::Great);
+    CHECK(events[0].IsTimed);
+    CHECK(judge.GetNoteState(0) == NoteState::Hit);
+    CHECK(judge.IsFollowing(0));
 
-    // A second pointer takes the circle; the first, still holding, can't take the other slider.
+    // A second pointer takes the circle, then the other slider's head.
     judge.ProcessAction(Press(1'100'000, {200.0f, 200.0f}, 1), events);
-    judge.ProcessAction(Press(1'200'000, {200.0f, 300.0f}), events);
-    REQUIRE(events.size() == 2);
-    CHECK(events[1].NoteIndex == 1);
+    judge.ProcessAction(Release(1'105'000, {200.0f, 200.0f}, 1), events);
+    judge.ProcessAction(Move(1'200'000, {240.0f, 200.0f}), events);
     judge.ProcessAction(Press(1'210'000, {200.0f, 300.0f}, 1), events);
     REQUIRE(events.size() == 3);
-    CHECK(events[2].NoteIndex == 2);
-    CHECK(events[2].Result == Judgment::Great);
+    CHECK(events[1].NoteIndex == 1);
+    CHECK(events[1].Part == 0);
+    CHECK(events[1].Result == Judgment::Great);
+    CheckPart(events[2], 2, 1, Judgment::Great);
+    CHECK(events[2].ErrorUs == 10'000);
 
-    // Letting go early ends the hold; the first slider is let go when it ends.
+    // Letting go misses the second slider's tail (judged 36 ms early, at 1.364 s). The first is
+    // followed to its end. Sliders have no result of their own.
     judge.ProcessAction(Release(1'300'000, {250.0f, 300.0f}, 1), events);
-    CHECK(judge.GetNoteState(2) == NoteState::Hit);
-    judge.Advance(1'500'000, events);
-    CHECK(judge.GetNoteState(0) == NoteState::Held);
-    judge.Advance(1'500'001, events);
-    CHECK(judge.GetNoteState(0) == NoteState::Hit);
-    CHECK(events.size() == 3);
+    CHECK_FALSE(judge.IsFollowing(2));
+    judge.ProcessAction(Move(1'460'000, {292.0f, 200.0f}), events);
+    REQUIRE(events.size() == 4);
+    CheckPart(events[3], 2, 2, Judgment::Miss);
+    CHECK_FALSE(events[3].IsTimed);
+    CHECK(events[3].Time == 1'400'000);
+    CHECK(judge.IsFollowing(0));
+
+    judge.Advance(2'000'000, events);
+    REQUIRE(events.size() == 5);
+    CheckPart(events[4], 0, 2, Judgment::Great);
+    CHECK(events[4].Time == 1'500'000);
     CHECK(judge.IsFinished());
+}
+
+TEST_CASE("Circle sliders: ticks along each pass, repeats, and a tail judged early")
+{
+    // 200 units there and back over a second, a tick every 50: three a pass, met in reverse on the
+    // way back, 4 units (10 ms of travel) clear of the ends.
+    CircleChart chart;
+    chart.Difficulty.CircleSize = 4.0f;
+    chart.Difficulty.OverallDifficulty = 5.0f;
+    chart.Difficulty.StackLeniency = 0.0f;
+    chart.ControlPoints = {{100.0f, 100.0f}, {300.0f, 100.0f}};
+    chart.Notes = {Slider(1'000'000, 2'000'000, {100.0f, 100.0f}, 0, 200.0f)};
+    chart.Notes[0].IsNewCombo = true;
+    chart.Notes[0].Passes = 2;
+    chart.Notes[0].TickDistance = 50.0f;
+    FinishCircleChart(chart);
+
+    const CircleNote& slider = chart.Notes[0];
+    REQUIRE(slider.PartCount == 9);
+    CHECK(chart.GetMaxCombo() == 9);
+    struct Expected
+    {
+        SliderPartType Type;
+        SongTimeUs Time;
+        float Progress;
+    };
+    const std::vector<Expected> expected{
+        {SliderPartType::Head, 1'000'000, 0.0f},   {SliderPartType::Tick, 1'125'000, 0.25f},
+        {SliderPartType::Tick, 1'250'000, 0.5f},   {SliderPartType::Tick, 1'375'000, 0.75f},
+        {SliderPartType::Repeat, 1'500'000, 1.0f}, {SliderPartType::Tick, 1'625'000, 0.75f},
+        {SliderPartType::Tick, 1'750'000, 0.5f},   {SliderPartType::Tick, 1'875'000, 0.25f},
+        {SliderPartType::Tail, 2'000'000, 0.0f}};
+    for (uint32_t part = 1; part <= slider.PartCount; ++part)
+    {
+        CAPTURE(part);
+        const SliderPart* sliderPart = hyoshi::circle::GetSliderPart(chart, 0, part);
+        REQUIRE(sliderPart != nullptr);
+        CHECK(sliderPart->Type == expected[part - 1].Type);
+        CHECK(sliderPart->Time == expected[part - 1].Time);
+        CHECK(sliderPart->Progress == doctest::Approx(expected[part - 1].Progress));
+    }
+    CHECK(hyoshi::circle::GetSliderPart(chart, 0, 9)->JudgeTime == 1'964'000);
+    CHECK(hyoshi::circle::GetSliderPart(chart, 0, 0) == nullptr);
+    CHECK(hyoshi::circle::GetSliderPart(chart, 0, 10) == nullptr);
+
+    // Struck, then followed, but lost for the second tick (more than 2.4 radii off) and found
+    // again within a radius of the ball, and let go before the tail: 7 parts of 9, a Good.
+    CircleJudge judge;
+    judge.Reset(chart);
+    std::vector<JudgmentEvent> events;
+    const std::vector<GameplayAction> actions{Press(1'000'000, {100.0f, 100.0f}), Move(1'120'000, {148.0f, 100.0f}),
+                                              Move(1'200'000, {180.0f, 300.0f}),  Move(1'300'000, {220.0f, 100.0f}),
+                                              Move(1'370'000, {248.0f, 100.0f}),  Move(1'495'000, {298.0f, 100.0f}),
+                                              Move(1'620'000, {252.0f, 100.0f}),  Move(1'745'000, {202.0f, 100.0f}),
+                                              Move(1'870'000, {152.0f, 100.0f}),  Release(1'900'000, {140.0f, 100.0f})};
+    for (const GameplayAction& action : actions)
+    {
+        judge.ProcessAction(action, events);
+    }
+    judge.Advance(3'000'000, events);
+    CHECK(judge.IsFinished());
+    REQUIRE(events.size() == 9);
+    const std::vector<Judgment> parts{Judgment::Great, Judgment::Great, Judgment::Miss,
+                                      Judgment::Great, Judgment::Great, Judgment::Great,
+                                      Judgment::Great, Judgment::Great, Judgment::Miss};
+    for (uint32_t part = 1; part <= 9; ++part)
+    {
+        CAPTURE(part);
+        CheckPart(events[part - 1], 0, part, parts[part - 1]);
+        CHECK(events[part - 1].IsTimed == (part == 1));
+    }
+
+    // The head is worth 300, each tick and repeat 30, and the tail 150, all counting for accuracy,
+    // with a combo each; a missed tick breaks it, a missed tail doesn't.
+    CircleScore score;
+    score.Reset(chart);
+    for (const JudgmentEvent& event : events)
+    {
+        score.Add(event);
+    }
+    CHECK(score.GetCombo() == 5);
+    CHECK(score.GetMaxCombo() == 5);
+    CHECK(score.GetJudgedCount() == 1);
+    CHECK(score.GetCount(Judgment::Great) == 1);
+    // 480 of 660.
+    CHECK(score.GetAccuracyBasisPoints() == 7'272);
+    const auto root = [](double combo) { return std::sqrt(combo); };
+    const double comboPortion =
+        300.0 + (30.0 * root(2)) + (30.0 * root(1)) + (30.0 * (root(2) + root(3) + root(4) + root(5)));
+    const double maxComboPortion =
+        300.0 + (30.0 * (root(2) + root(3) + root(4) + root(5) + root(6) + root(7) + root(8))) + (150.0 * root(9));
+    CHECK(score.GetScore() == StandardisedScore(comboPortion, maxComboPortion, 480.0 / 660.0, 1.0));
+    CHECK(std::string(score.GetRank()) == "C");
+}
+
+TEST_CASE("Circle sliders: a head struck late judges the parts already passed by where it was struck")
+{
+    // Two sliders there and back, 0.2 s each: the first 50 units long, so its turn is within
+    // reach of the head (2.4 radii, 87.6 units), the second 100, so it isn't.
+    CircleChart chart;
+    chart.Difficulty.CircleSize = 4.0f;
+    chart.Difficulty.OverallDifficulty = 5.0f;
+    chart.Difficulty.StackLeniency = 0.0f;
+    chart.ControlPoints = {{200.0f, 200.0f}, {250.0f, 200.0f}, {200.0f, 300.0f}, {300.0f, 300.0f}};
+    chart.Notes = {Slider(1'000'000, 1'200'000, {200.0f, 200.0f}, 0, 50.0f),
+                   Slider(2'000'000, 2'200'000, {200.0f, 300.0f}, 2, 100.0f)};
+    chart.Notes[0].IsNewCombo = true;
+    chart.Notes[0].Passes = 2;
+    chart.Notes[1].Passes = 2;
+    FinishCircleChart(chart);
+
+    CircleJudge judge;
+    judge.Reset(chart);
+    std::vector<JudgmentEvent> events;
+    // 120 ms late: a 50. The turn (at 1.1 s) waited for the head, and is hit from there.
+    judge.ProcessAction(Press(1'120'000, {200.0f, 200.0f}), events);
+    REQUIRE(events.size() == 2);
+    CheckPart(events[0], 0, 1, Judgment::Bad);
+    CHECK(events[0].ErrorUs == 120'000);
+    CheckPart(events[1], 0, 2, Judgment::Great);
+    CHECK_FALSE(events[1].IsTimed);
+    // Onto the ball for the tail.
+    judge.ProcessAction(Move(1'130'000, {235.0f, 200.0f}), events);
+    judge.ProcessAction(Release(1'190'000, {205.0f, 200.0f}), events);
+    REQUIRE(events.size() == 3);
+    CheckPart(events[2], 0, 3, Judgment::Great);
+
+    // The second's turn is out of reach of its head: missed.
+    judge.ProcessAction(Press(2'120'000, {200.0f, 300.0f}), events);
+    judge.ProcessAction(Release(2'130'000, {200.0f, 300.0f}), events);
+    judge.Advance(3'000'000, events);
+    REQUIRE(events.size() == 6);
+    CheckPart(events[3], 1, 1, Judgment::Bad);
+    CheckPart(events[4], 1, 2, Judgment::Miss);
+    CheckPart(events[5], 1, 3, Judgment::Miss);
+    CHECK(judge.IsFinished());
+}
+
+TEST_CASE("Circle sliders: held through without striking the head, the rest is still followed")
+{
+    CircleChart chart;
+    chart.Difficulty.CircleSize = 4.0f;
+    chart.Difficulty.OverallDifficulty = 5.0f;
+    chart.Difficulty.StackLeniency = 0.0f;
+    chart.ControlPoints = {{200.0f, 200.0f}, {300.0f, 200.0f}};
+    chart.Notes = {Slider(1'000'000, 1'500'000, {200.0f, 200.0f}, 0, 100.0f)};
+    chart.Notes[0].IsNewCombo = true;
+    FinishCircleChart(chart);
+
+    // Down on the head long before it can be struck, so the press does nothing; following starts
+    // with the slider, and the head misses at the end of its window.
+    CircleJudge judge;
+    judge.Reset(chart);
+    std::vector<JudgmentEvent> events;
+    judge.ProcessAction(Press(500'000, {200.0f, 200.0f}), events);
+    judge.ProcessAction(Move(1'460'000, {292.0f, 200.0f}), events);
+    judge.Advance(2'000'000, events);
+    REQUIRE(events.size() == 2);
+    CheckPart(events[0], 0, 1, Judgment::Miss);
+    CHECK(events[0].Time == 1'150'001);
+    CHECK(judge.GetNoteState(0) == NoteState::Missed);
+    CheckPart(events[1], 0, 2, Judgment::Great);
+
+    // The missed head broke the combo; the tail added to it.
+    CircleScore score;
+    score.Reset(chart);
+    for (const JudgmentEvent& event : events)
+    {
+        score.Add(event);
+    }
+    CHECK(score.GetMaxCombo() == 1);
+}
+
+TEST_CASE("osu!standard import: hit sounds, from the notes and the sample points")
+{
+    const std::string text =
+        WithLine(WithLine(WithLine(OSU_STANDARD, "Mode: 0\n", "Mode: 0\nSampleSet: Soft\n"), "[TimingPoints]\n",
+                          "[TimingPoints]\n1000,500,4,0,0,60,1,0\n2000,-100,4,3,2,40,0,0\n"),
+                 "1000,500,4,1,0,100,1,0\n3000,-50,4,1,0,100,0,0\n", "");
+    const std::string objects = "[HitObjects]\n"
+                                "100,100,1000,5,2,0:0:0:0:\n"
+                                "100,100,1500,1,8,1:2:0:80:\n"
+                                "100,200,2000,2,4,L|200:200,1,100,2|8,1:0|2:3,0:0:0:0:\n"
+                                "100,100,3000,1,0,0:0:5:0:hit.wav\n";
+    const CircleChart chart = ImportChart(text.substr(0, text.find("[HitObjects]")) + objects);
+    REQUIRE(chart.Notes.size() == 4);
+    REQUIRE(chart.SamplePoints.size() == 2);
+    // A sample set of 0 is the map's.
+    CHECK(chart.SamplePoints[0].Bank == SampleBank::Soft);
+    CHECK(chart.SamplePoints[1].Bank == SampleBank::Drum);
+    CHECK(chart.SamplePoints[1].CustomIndex == 2);
+    CHECK(chart.SamplePoints[1].Volume == 40);
+
+    // A whistle, all else from the sample point.
+    hyoshi::circle::ResolvedHitSound sound = hyoshi::circle::GetHitSound(chart, 0, 0);
+    CHECK(sound.Bank == SampleBank::Soft);
+    CHECK(sound.AdditionBank == SampleBank::Soft);
+    CHECK(sound.Additions == hyoshi::circle::ADDITION_WHISTLE);
+    CHECK(sound.CustomIndex == 0);
+    CHECK(sound.Volume == doctest::Approx(0.6f));
+
+    // Its own banks and volume.
+    sound = hyoshi::circle::GetHitSound(chart, 1, 0);
+    CHECK(sound.Bank == SampleBank::Normal);
+    CHECK(sound.AdditionBank == SampleBank::Soft);
+    CHECK(sound.Additions == hyoshi::circle::ADDITION_CLAP);
+    CHECK(sound.Volume == doctest::Approx(0.8f));
+
+    // A slider's edges have their own sounds and banks; its body (part 0) has the object's.
+    sound = hyoshi::circle::GetHitSound(chart, 2, 1);
+    CHECK(sound.Bank == SampleBank::Normal);
+    CHECK(sound.AdditionBank == SampleBank::Normal);
+    CHECK(sound.Additions == hyoshi::circle::ADDITION_WHISTLE);
+    CHECK(sound.CustomIndex == 2);
+    CHECK(sound.Volume == doctest::Approx(0.4f));
+    sound = hyoshi::circle::GetHitSound(chart, 2, 2);
+    CHECK(sound.Bank == SampleBank::Soft);
+    CHECK(sound.AdditionBank == SampleBank::Drum);
+    CHECK(sound.Additions == hyoshi::circle::ADDITION_CLAP);
+    sound = hyoshi::circle::GetHitSound(chart, 2, 0);
+    CHECK(sound.Bank == SampleBank::Drum);
+    CHECK(sound.Additions == hyoshi::circle::ADDITION_FINISH);
+
+    // A file instead, with its custom index.
+    sound = hyoshi::circle::GetHitSound(chart, 3, 0);
+    CHECK(sound.File == "hit.wav");
+    CHECK(sound.CustomIndex == 5);
+
+    // Tick distance: SliderMultiplier * 100 * velocity / SliderTickRate.
+    CHECK(chart.Notes[2].TickDistance == doctest::Approx(100.0f));
 }
 
 TEST_CASE("Circle autoplay: every note Great, on imported and stacked charts")
@@ -464,6 +739,8 @@ TEST_CASE("Circle autoplay: every note Great, on imported and stacked charts")
     // A stack, a chord, and back-to-back sliders.
     std::string dense = OSU_STANDARD;
     dense = WithLine(dense, "OverallDifficulty:5\n", "OverallDifficulty:10\nApproachRate:9\n");
+    // Ticks on every slider.
+    dense = WithLine(dense, "SliderTickRate:1\n", "SliderTickRate:4\n");
     dense += "256,192,7000,5,0,0:0:0:0:\n"
              "256,192,7100,1,0,0:0:0:0:\n"
              "256,192,7200,1,0,0:0:0:0:\n"
@@ -478,18 +755,23 @@ TEST_CASE("Circle autoplay: every note Great, on imported and stacked charts")
     {
         const std::vector<JudgmentEvent> events =
             RunReplay(chart, hyoshi::circle::MakeAutoplayActions(chart), chart.GetEndTime() + 1'000'000);
-        CHECK(events.size() == chart.GetJudgmentCount());
+        CHECK(CountResults(events) == chart.GetJudgmentCount());
+        CHECK(chart.GetMaxCombo() > chart.GetJudgmentCount());
         CircleScore score;
+        score.Reset(chart);
         for (const JudgmentEvent& event : events)
         {
             CAPTURE(event.NoteIndex);
+            CAPTURE(event.Part);
             CHECK(event.Result == Judgment::Great);
             CHECK(event.ErrorUs == 0);
             score.Add(event);
         }
         CHECK(score.GetAccuracyBasisPoints() == 10'000);
-        CHECK(score.GetMaxCombo() == chart.GetJudgmentCount());
+        CHECK(score.GetMaxCombo() == chart.GetMaxCombo());
         CHECK(std::string(score.GetRank()) == "SS");
+        // Every judgment in the order a perfect run makes them.
+        CHECK(score.GetScore() == 1'000'000);
     }
 }
 
@@ -549,31 +831,56 @@ TEST_CASE("Circle judging is deterministic and doesn't depend on frame timing")
 
         const std::vector<JudgmentEvent> replayed = RunReplay(chart, recorded, END);
         CHECK(SameEvents(live, replayed));
-        CHECK(live.size() == chart.GetJudgmentCount());
+        CHECK(CountResults(live) == chart.GetJudgmentCount());
         CHECK(std::any_of(live.begin(), live.end(), [](const JudgmentEvent& e) { return e.Result == Judgment::Miss; }));
         CHECK(std::any_of(live.begin(), live.end(), [](const JudgmentEvent& e) { return e.Result != Judgment::Miss; }));
     }
 }
 
-TEST_CASE("Circle score: combo multiplier, weighted accuracy, and ranks")
+TEST_CASE("Circle score: lazer's standardised score, weighted accuracy, and ranks")
 {
-    const auto event = [](Judgment result)
+    std::vector<CircleNote> notes;
+    for (int i = 0; i < 5; ++i)
+    {
+        notes.push_back(Circle(1'000'000 + (i * 500'000), {100.0f, 100.0f}));
+    }
+    const CircleChart chart = MakeChart(notes);
+    const auto event = [](uint32_t note, Judgment result)
     {
         JudgmentEvent e;
+        e.NoteIndex = note;
         e.Result = result;
         return e;
     };
 
     CircleScore score;
+    score.Reset(chart);
+    CHECK(score.GetScore() == 0);
     CHECK(score.GetAccuracyBasisPoints() == 10'000);
     CHECK(std::string(score.GetRank()) == "-");
 
-    for (const Judgment result : {Judgment::Great, Judgment::Great, Judgment::Good, Judgment::Miss, Judgment::Bad})
+    // A perfect run is 1,000,000.
+    for (uint32_t i = 0; i < 5; ++i)
     {
-        score.Add(event(result));
+        score.Add(event(i, Judgment::Great));
     }
-    // 300 + 300 * 26/25 + 100 * 27/25, then the miss, then 50 at combo 0.
-    CHECK(score.GetScore() == 300 + 312 + 108 + 50);
+    CHECK(score.GetScore() == 1'000'000);
+    CHECK(std::string(score.GetRank()) == "SS");
+
+    score.Reset(chart);
+    const std::vector<Judgment> results{Judgment::Great, Judgment::Great, Judgment::Good, Judgment::Miss,
+                                        Judgment::Bad};
+    for (uint32_t i = 0; i < 5; ++i)
+    {
+        score.Add(event(i, results[i]));
+    }
+    const double comboPortion = 300.0 + (300.0 * std::sqrt(2.0)) + (100.0 * std::sqrt(3.0)) + 50.0;
+    double maxComboPortion = 0.0;
+    for (int i = 1; i <= 5; ++i)
+    {
+        maxComboPortion += 300.0 * std::sqrt(static_cast<double>(i));
+    }
+    CHECK(score.GetScore() == StandardisedScore(comboPortion, maxComboPortion, 0.5, 1.0));
     CHECK(score.GetCombo() == 1);
     CHECK(score.GetMaxCombo() == 3);
     CHECK(score.GetCount(Judgment::Great) == 2);
@@ -583,23 +890,28 @@ TEST_CASE("Circle score: combo multiplier, weighted accuracy, and ranks")
     CHECK(score.GetAccuracyBasisPoints() == 5'000);
     CHECK(std::string(score.GetRank()) == "D");
 
+    // Partway: accuracy's share grows with the judgments made.
+    score.Reset(chart);
+    score.Add(event(0, Judgment::Great));
+    CHECK(score.GetScore() == StandardisedScore(300.0, maxComboPortion, 1.0, 0.2));
+
     // 19 Greats and a Good: 96.66%.
-    score.Reset();
+    score.Reset(chart);
     for (int i = 0; i < 19; ++i)
     {
-        score.Add(event(Judgment::Great));
+        score.Add(event(0, Judgment::Great));
     }
-    score.Add(event(Judgment::Good));
+    score.Add(event(0, Judgment::Good));
     CHECK(score.GetAccuracyBasisPoints() == 9'666);
     CHECK(std::string(score.GetRank()) == "S");
 
     // Over 95% with a miss is an A.
-    score.Reset();
+    score.Reset(chart);
     for (int i = 0; i < 39; ++i)
     {
-        score.Add(event(Judgment::Great));
+        score.Add(event(0, Judgment::Great));
     }
-    score.Add(event(Judgment::Miss));
+    score.Add(event(0, Judgment::Miss));
     CHECK(score.GetAccuracyBasisPoints() == 9'750);
     CHECK(std::string(score.GetRank()) == "A");
 }

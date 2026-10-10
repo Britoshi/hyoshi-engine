@@ -25,6 +25,14 @@ constexpr int DENSE_SAMPLES = 256;
 constexpr int MIN_PATH_SEGMENTS = 8;
 constexpr int MAX_PATH_SEGMENTS = 256;
 
+// No tick closer to a pass's end than the ball travels in this time (osu!'s).
+constexpr double TICK_END_GAP_US = 10'000.0;
+// However short its tick distance, a slider gets at most this many ticks a pass.
+constexpr size_t MAX_TICKS_PER_PASS = 1'024;
+
+// osu! looks up a note's sample point this much after the note.
+constexpr SongTimeUs SAMPLE_POINT_LENIENCE_US = 5'000;
+
 int64_t MsToUs(double milliseconds)
 {
     return std::llround(milliseconds * 1000.0);
@@ -334,6 +342,83 @@ void ComputeStacking(CircleChart& chart)
     }
 }
 
+// A slider's sound for an edge (0 is the head, then each turn, then the tail), after its body's.
+uint32_t GetEdgeHitSound(const CircleNote& note, uint32_t edge)
+{
+    const uint32_t slot = 1 + edge;
+    return slot < note.HitSoundCount ? note.FirstHitSound + slot : NO_HIT_SOUND;
+}
+
+// lazer's SliderEventGenerator: the head; on each pass, a tick every TickDistance along the path
+// from the head (but none within TICK_END_GAP_US of travel of the pass's end), met in reverse on
+// the way back, and a repeat where the ball turns; then the tail.
+void ComputeSliderParts(CircleChart& chart)
+{
+    chart.SliderParts.clear();
+    for (CircleNote& note : chart.Notes)
+    {
+        note.FirstPart = static_cast<uint32_t>(chart.SliderParts.size());
+        note.PartCount = 0;
+        if (note.Type != NoteType::Slider)
+        {
+            continue;
+        }
+        const uint32_t passes = std::max<uint32_t>(note.Passes, 1);
+        const double passUs = static_cast<double>(std::max<SongTimeUs>(note.EndTime - note.Time, 0)) / passes;
+        const uint32_t bodySound = note.HitSoundCount > 0 ? note.FirstHitSound : NO_HIT_SOUND;
+        const auto add = [&](SliderPartType type, SongTimeUs time, double progress, uint32_t sound)
+        { chart.SliderParts.push_back({time, time, type, static_cast<float>(progress), sound}); };
+
+        add(SliderPartType::Head, note.Time, 0.0, GetEdgeHitSound(note, 0));
+        std::vector<double> ticks;
+        const double length = note.Length;
+        if (note.TickDistance > 0.0f && length > 0.0 && passUs > 0.0)
+        {
+            const double endGap = length / passUs * TICK_END_GAP_US;
+            for (double along = note.TickDistance; along < length - endGap && ticks.size() < MAX_TICKS_PER_PASS;
+                 along += note.TickDistance)
+            {
+                ticks.push_back(along / length);
+            }
+        }
+        for (uint32_t pass = 0; pass < passes; ++pass)
+        {
+            const double passStart = static_cast<double>(note.Time) + (pass * passUs);
+            const bool isForward = pass % 2 == 0;
+            for (size_t t = 0; t < ticks.size(); ++t)
+            {
+                const double progress = isForward ? ticks[t] : ticks[ticks.size() - 1 - t];
+                const double fraction = isForward ? progress : 1.0 - progress;
+                add(SliderPartType::Tick, std::llround(passStart + (fraction * passUs)), progress, bodySound);
+            }
+            if (pass + 1 < passes)
+            {
+                add(SliderPartType::Repeat, std::llround(passStart + passUs), isForward ? 1.0 : 0.0,
+                    GetEdgeHitSound(note, pass + 1));
+            }
+        }
+        add(SliderPartType::Tail, note.EndTime, passes % 2 == 1 ? 1.0 : 0.0, GetEdgeHitSound(note, passes));
+        // Judged early, but never before the part ahead of it.
+        SliderPart& tail = chart.SliderParts.back();
+        const SliderPart& before = chart.SliderParts[chart.SliderParts.size() - 2];
+        tail.JudgeTime =
+            std::max({note.Time + ((note.EndTime - note.Time) / 2), note.EndTime - TAIL_LENIENCE_US, before.JudgeTime});
+        note.PartCount = static_cast<uint32_t>(chart.SliderParts.size()) - note.FirstPart;
+    }
+}
+
+SamplePoint GetSamplePoint(const CircleChart& chart, SongTimeUs time)
+{
+    const std::vector<SamplePoint>& points = chart.SamplePoints;
+    if (points.empty())
+    {
+        return {};
+    }
+    const auto after = std::upper_bound(points.begin(), points.end(), time,
+                                        [](SongTimeUs t, const SamplePoint& point) { return t < point.Time; });
+    return after == points.begin() ? points.front() : *(after - 1);
+}
+
 } // namespace
 
 rhythm::Judgment CircleWindows::Classify(int64_t errorUs) const
@@ -373,6 +458,16 @@ uint32_t CircleChart::GetJudgmentCount() const
                                                [](const CircleNote& note) { return note.Type != NoteType::Spinner; }));
 }
 
+uint32_t CircleChart::GetMaxCombo() const
+{
+    uint32_t combo = 0;
+    for (const CircleNote& note : Notes)
+    {
+        combo += note.Type == NoteType::Slider ? note.PartCount : (note.Type == NoteType::Circle ? 1 : 0);
+    }
+    return combo;
+}
+
 SongTimeUs CircleChart::GetEndTime() const
 {
     SongTimeUs end = 0;
@@ -387,7 +482,43 @@ void FinishCircleChart(CircleChart& chart)
 {
     ComputeComboNumbers(chart);
     ComputePaths(chart);
+    ComputeSliderParts(chart);
     ComputeStacking(chart);
+}
+
+const SliderPart* GetSliderPart(const CircleChart& chart, uint32_t note, uint32_t part)
+{
+    const CircleNote& owner = chart.Notes[note];
+    if (part == 0 || part > owner.PartCount)
+    {
+        return nullptr;
+    }
+    return &chart.SliderParts[owner.FirstPart + part - 1];
+}
+
+ResolvedHitSound GetHitSound(const CircleChart& chart, uint32_t note, uint32_t part)
+{
+    const CircleNote& owner = chart.Notes[note];
+    uint32_t index = owner.HitSoundCount > 0 ? owner.FirstHitSound : NO_HIT_SOUND;
+    SongTimeUs time = owner.Time;
+    if (const SliderPart* sliderPart = GetSliderPart(chart, note, part))
+    {
+        index = sliderPart->HitSound;
+        time = sliderPart->Time;
+    }
+    static const HitSound DEFAULT_SOUND;
+    const HitSound& sound = index < chart.HitSounds.size() ? chart.HitSounds[index] : DEFAULT_SOUND;
+    const SamplePoint point = GetSamplePoint(chart, time + SAMPLE_POINT_LENIENCE_US);
+
+    ResolvedHitSound resolved;
+    resolved.Bank = sound.Bank.value_or(point.Bank);
+    resolved.AdditionBank = sound.AdditionBank.value_or(resolved.Bank);
+    resolved.Additions = sound.Additions;
+    resolved.CustomIndex = sound.CustomIndex != 0 ? sound.CustomIndex : point.CustomIndex;
+    resolved.Volume =
+        static_cast<float>(std::min<uint32_t>(sound.Volume != 0 ? sound.Volume : point.Volume, 100)) / 100.0f;
+    resolved.File = sound.File;
+    return resolved;
 }
 
 glm::vec2 GetPathPosition(const CircleChart& chart, const CircleNote& note, float progress)

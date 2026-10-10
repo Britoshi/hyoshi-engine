@@ -47,6 +47,11 @@ struct JudgmentEvent
     SongTimeUs Time = 0;
     // The release at the end of a note with a duration, rather than its start.
     bool IsTail = false;
+    // A part of the note judged on its own, counting from 1 (the mode says what its parts are:
+    // Circle's slider parts), or 0 for the note itself.
+    uint32_t Part = 0;
+    // ErrorUs is a press's timing. False for results judged some other way (following a slider).
+    bool IsTimed = true;
 };
 
 // A mode-specific player action with its song time (DESIGN.md section 12.5). Replays are lists

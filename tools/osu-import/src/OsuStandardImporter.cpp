@@ -34,6 +34,12 @@ constexpr int HOLD_BIT = 128;
 constexpr double MIN_SV = 0.1;
 constexpr double MAX_SV = 10.0;
 constexpr glm::vec2 SPINNER_POSITION{256.0f, 192.0f};
+// Hit sound bits. The normal sound plays whatever they say.
+constexpr int WHISTLE_BIT = 2;
+constexpr int FINISH_BIT = 4;
+constexpr int CLAP_BIT = 8;
+// From format v8, slider ticks keep their spacing in beats whatever the slider velocity.
+constexpr int TICKS_IN_BEATS_VERSION = 8;
 
 struct OsuTimingPoint
 {
@@ -41,6 +47,10 @@ struct OsuTimingPoint
     double BeatLength = 0.0;
     int Meter = 4;
     bool IsUninherited = true;
+    // The sample set (0: the map's default), custom sample index, and volume from here on.
+    int SampleSet = 0;
+    int SampleIndex = 0;
+    int Volume = 100;
 };
 
 struct OsuHitObject
@@ -55,11 +65,75 @@ struct OsuHitObject
     std::vector<glm::vec2> ControlPoints;
     int Passes = 1;
     double Length = 0.0;
+    // Its sound: the hit sound bits as additions, and the hitSample field.
+    circle::HitSound Sample;
+    // Sliders: each edge's hit sound bits and banks (normal:addition), where given.
+    std::vector<std::string> EdgeSounds;
+    std::vector<std::string> EdgeSets;
 };
 
 SongTimeUs MsToUs(double milliseconds, int64_t offsetUs)
 {
     return std::llround(milliseconds * 1000.0) + offsetUs;
+}
+
+int ParseInt(std::string_view text, int fallback)
+{
+    const std::optional<double> number = ParseNumber(text);
+    return number ? static_cast<int>(*number) : fallback;
+}
+
+// osu!'s sample set numbers: 1 normal, 2 soft, 3 drum. 0 leaves it to what's in effect, and
+// anything else is read as normal, as lazer does.
+std::optional<circle::SampleBank> ToSampleBank(int set)
+{
+    switch (set)
+    {
+    case 0:
+        return std::nullopt;
+    case 2:
+        return circle::SampleBank::Soft;
+    case 3:
+        return circle::SampleBank::Drum;
+    default:
+        return circle::SampleBank::Normal;
+    }
+}
+
+uint8_t ToAdditions(int hitSoundBits)
+{
+    uint8_t additions = 0;
+    additions |= (hitSoundBits & WHISTLE_BIT) != 0 ? circle::ADDITION_WHISTLE : 0;
+    additions |= (hitSoundBits & FINISH_BIT) != 0 ? circle::ADDITION_FINISH : 0;
+    additions |= (hitSoundBits & CLAP_BIT) != 0 ? circle::ADDITION_CLAP : 0;
+    return additions;
+}
+
+// A hitSample field (normalSet:additionSet:index:volume:filename), or an edge set (the two banks).
+void ReadHitSample(std::string_view text, circle::HitSound& sound)
+{
+    if (text.empty())
+    {
+        return;
+    }
+    const std::vector<std::string_view> fields = Split(text, ':');
+    sound.Bank = ToSampleBank(ParseInt(fields[0], 0));
+    if (fields.size() > 1)
+    {
+        sound.AdditionBank = ToSampleBank(ParseInt(fields[1], 0));
+    }
+    if (fields.size() > 2)
+    {
+        sound.CustomIndex = static_cast<uint32_t>(std::max(0, ParseInt(fields[2], 0)));
+    }
+    if (fields.size() > 3)
+    {
+        sound.Volume = static_cast<uint32_t>(std::clamp(ParseInt(fields[3], 0), 0, 100));
+    }
+    if (fields.size() > 4)
+    {
+        sound.File = std::string(fields[4]);
+    }
 }
 
 CurveType ParseCurveType(std::string_view letter)
@@ -122,6 +196,7 @@ Result<OsuStandardImportResult> ImportOsuStandard(std::string_view osuText)
 
     int formatVersion = 14;
     int mode = 0;
+    circle::SampleBank defaultBank = circle::SampleBank::Normal;
     std::optional<float> approachRate;
     double audioLeadInMs = 0.0;
     std::vector<OsuTimingPoint> timingPoints;
@@ -190,6 +265,10 @@ Result<OsuStandardImportResult> ImportOsuStandard(std::string_view osuText)
             else if (key == "Mode")
             {
                 mode = static_cast<int>(number.value_or(0.0));
+            }
+            else if (key == "SampleSet")
+            {
+                defaultBank = ToSampleBank(value == "Soft" ? 2 : (value == "Drum" ? 3 : 1)).value();
             }
             else if (key == "StackLeniency")
             {
@@ -265,6 +344,9 @@ Result<OsuStandardImportResult> ImportOsuStandard(std::string_view osuText)
             point.BeatLength = *beatLength;
             point.Meter = fields.size() > 2 ? static_cast<int>(ParseNumber(fields[2]).value_or(4.0)) : 4;
             point.IsUninherited = fields.size() > 6 ? ParseNumber(fields[6]).value_or(1.0) != 0.0 : true;
+            point.SampleSet = fields.size() > 3 ? ParseInt(fields[3], 0) : 0;
+            point.SampleIndex = fields.size() > 4 ? std::max(0, ParseInt(fields[4], 0)) : 0;
+            point.Volume = fields.size() > 5 ? std::clamp(ParseInt(fields[5], 100), 0, 100) : 100;
             if (point.IsUninherited && point.BeatLength <= 0.0)
             {
                 result.Warnings.push_back(where + ": timing point with no tempo, skipped");
@@ -289,9 +371,10 @@ Result<OsuStandardImportResult> ImportOsuStandard(std::string_view osuText)
             object.Position = {static_cast<float>(*x), static_cast<float>(*y)};
             object.TimeMs = *time;
             object.Type = static_cast<int>(*type);
+            object.Sample.Additions = ToAdditions(fields.size() > 4 ? ParseInt(fields[4], 0) : 0);
             if ((object.Type & SLIDER_BIT) != 0)
             {
-                // x,y,time,type,hitSound,curve,slides,length,...
+                // x,y,time,type,hitSound,curve,slides,length,edgeSounds,edgeSets,hitSample
                 if (fields.size() < 8)
                 {
                     result.Warnings.push_back(where + ": slider without a path, skipped");
@@ -300,16 +383,36 @@ Result<OsuStandardImportResult> ImportOsuStandard(std::string_view osuText)
                 pathTypeChanges += ReadSliderPath(fields[5], object) ? 1 : 0;
                 object.Passes = std::max(1, static_cast<int>(ParseNumber(fields[6]).value_or(1.0)));
                 object.Length = ParseNumber(fields[7]).value_or(0.0);
+                if (fields.size() > 8 && !fields[8].empty())
+                {
+                    for (const std::string_view edge : Split(fields[8], '|'))
+                    {
+                        object.EdgeSounds.emplace_back(edge);
+                    }
+                }
+                if (fields.size() > 9 && !fields[9].empty())
+                {
+                    for (const std::string_view edge : Split(fields[9], '|'))
+                    {
+                        object.EdgeSets.emplace_back(edge);
+                    }
+                }
+                ReadHitSample(fields.size() > 10 ? fields[10] : std::string_view(), object.Sample);
             }
             else if ((object.Type & SPINNER_BIT) != 0)
             {
-                // x,y,time,type,hitSound,endTime,...
+                // x,y,time,type,hitSound,endTime,hitSample
                 object.EndTimeMs = fields.size() > 5 ? ParseNumber(fields[5]).value_or(*time) : *time;
             }
             else if ((object.Type & HOLD_BIT) != 0 && (object.Type & CIRCLE_BIT) == 0)
             {
                 result.Warnings.push_back(where + ": osu!mania hold in a standard beatmap, skipped");
                 continue;
+            }
+            else
+            {
+                // x,y,time,type,hitSound,hitSample
+                ReadHitSample(fields.size() > 5 ? fields[5] : std::string_view(), object.Sample);
             }
             hitObjects.push_back(std::move(object));
         }
@@ -347,6 +450,19 @@ Result<OsuStandardImportResult> ImportOsuStandard(std::string_view osuText)
     for (const OsuTimingPoint& point : timingPoints)
     {
         const SongTimeUs time = MsToUs(point.TimeMs, offsetUs);
+        circle::SamplePoint sample;
+        sample.Time = time;
+        sample.Bank = ToSampleBank(point.SampleSet).value_or(defaultBank);
+        sample.CustomIndex = static_cast<uint32_t>(point.SampleIndex);
+        sample.Volume = static_cast<uint32_t>(point.Volume);
+        if (!chart.SamplePoints.empty() && chart.SamplePoints.back().Time == time)
+        {
+            chart.SamplePoints.back() = sample;
+        }
+        else
+        {
+            chart.SamplePoints.push_back(sample);
+        }
         double velocity = 1.0;
         if (point.IsUninherited)
         {
@@ -430,7 +546,34 @@ Result<OsuStandardImportResult> ImportOsuStandard(std::string_view osuText)
             note.Length = static_cast<float>(length);
             note.Passes = static_cast<uint32_t>(object.Passes);
             note.EndTime = note.Time + std::llround(beats * beatLength * object.Passes * 1000.0);
+            // Ticks come SliderTickRate times a beat. Before format v8 they kept their distance
+            // whatever the velocity instead, so a fast slider gets them closer together in time.
+            const double scoringDistance = chart.Difficulty.SliderMultiplier * 100.0 * velocity;
+            note.TickDistance = static_cast<float>(scoringDistance / chart.Difficulty.SliderTickRate /
+                                                   (formatVersion < TICKS_IN_BEATS_VERSION ? velocity : 1.0));
             chart.ControlPoints.insert(chart.ControlPoints.end(), points.begin(), points.end());
+
+            // The body (for ticks), then each edge: the object's sound, with the edge's own
+            // hit sound bits and banks where given.
+            note.FirstHitSound = static_cast<uint32_t>(chart.HitSounds.size());
+            chart.HitSounds.push_back(object.Sample);
+            for (size_t edge = 0; edge <= static_cast<size_t>(object.Passes); ++edge)
+            {
+                circle::HitSound sound = object.Sample;
+                if (edge < object.EdgeSounds.size())
+                {
+                    sound.Additions = ToAdditions(ParseInt(object.EdgeSounds[edge], 0));
+                }
+                if (edge < object.EdgeSets.size())
+                {
+                    circle::HitSound banks;
+                    ReadHitSample(object.EdgeSets[edge], banks);
+                    sound.Bank = banks.Bank;
+                    sound.AdditionBank = banks.AdditionBank;
+                }
+                chart.HitSounds.push_back(std::move(sound));
+            }
+            note.HitSoundCount = static_cast<uint32_t>(chart.HitSounds.size()) - note.FirstHitSound;
         }
         else if ((object.Type & SPINNER_BIT) != 0)
         {
@@ -443,6 +586,12 @@ Result<OsuStandardImportResult> ImportOsuStandard(std::string_view osuText)
         {
             result.Warnings.push_back("Slider at " + std::to_string(note.Time) +
                                       " us has a single control point; imported as a circle");
+        }
+        if (note.Type == NoteType::Circle)
+        {
+            note.FirstHitSound = static_cast<uint32_t>(chart.HitSounds.size());
+            note.HitSoundCount = 1;
+            chart.HitSounds.push_back(object.Sample);
         }
         chart.Notes.push_back(note);
     }
