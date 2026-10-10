@@ -545,6 +545,34 @@ void Platform::SetWindowSize(int32_t width, int32_t height)
     }
 }
 
+void Platform::SetFullscreen(bool isFullscreen)
+{
+#if defined(SDL_PLATFORM_ANDROID)
+    // Always immersive (Initialize): leaving fullscreen would bring the system bars back.
+    static_cast<void>(isFullscreen);
+#else
+    if (window == nullptr)
+    {
+        return;
+    }
+    // No display mode: borderless at the desktop's resolution, so the display doesn't switch modes.
+    SDL_SetWindowFullscreenMode(window, nullptr);
+    if (SDL_SetWindowFullscreen(window, isFullscreen))
+    {
+        HYOSHI_LOG_INFO("Window {}", isFullscreen ? "fullscreen" : "windowed");
+    }
+    else
+    {
+        HYOSHI_LOG_WARN("Couldn't {} fullscreen: {}", isFullscreen ? "go" : "leave", SDL_GetError());
+    }
+#endif
+}
+
+bool Platform::IsFullscreen() const
+{
+    return window != nullptr && (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
+}
+
 void Platform::SetPointerLocked(bool isLocked)
 {
     if (window == nullptr || SDL_GetWindowRelativeMouseMode(window) == isLocked)

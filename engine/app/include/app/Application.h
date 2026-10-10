@@ -101,10 +101,10 @@ public:
 };
 
 // The main loop: the window and its surface, the GPU, audio, input, the frame, scenes with a fade
-// between them, the debug overlay (F1), and the development hooks read from HYOSHI_* environment
-// variables (screenshots, timed exit, stress tests, the clock demo). A debug run exits with a
-// failure code when Vulkan validation complained, song time went backwards, or a scene reported a
-// failed check.
+// between them, the debug overlay (F1), fullscreen (F11 or Alt+Enter), and the development hooks
+// read from HYOSHI_* environment variables (screenshots, timed exit, stress tests, the clock demo).
+// A debug run exits with a failure code when Vulkan validation complained, song time went
+// backwards, or a scene reported a failed check.
 class Application
 {
 public:
@@ -135,6 +135,9 @@ private:
     void Shutdown();
     void SpawnDemoSprites(uint32_t count);
     void Update(float deltaSeconds);
+    // The engine's own keys: F1 for the debug overlay, and F11 or Alt+Enter for fullscreen. True
+    // if the event is used up, so the scene doesn't see it.
+    bool TakeShortcut(const input::InputEvent& event);
     void RunScene(HostTimeNs now, float deltaSeconds);
     // Ends the current scene, keeping what the exit checks need, and hands it back to be destroyed
     // once nothing refers to it.
@@ -172,6 +175,8 @@ private:
     bool isAudioSuspended = false;
     // F1 shows the debug overlay (ImGui).
     bool isDebugVisible = false;
+    // For Alt+Enter.
+    bool isAltHeld = false;
     // Fades in each new scene.
     float sceneFade = 1.0f;
 

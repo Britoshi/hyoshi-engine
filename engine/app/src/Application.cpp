@@ -269,14 +269,15 @@ int Application::Run()
         }
         // Input is taken only on frames that are drawn, so none is lost to a skipped frame.
         platform.GetInputQueue().Take(inputEvents);
+        size_t keptEvents = 0;
         for (const hyoshi::input::InputEvent& event : inputEvents)
         {
-            if (event.Type == hyoshi::input::InputEventType::KeyDown && !event.IsRepeat &&
-                event.Code == hyoshi::input::keys::F1)
+            if (!TakeShortcut(event))
             {
-                isDebugVisible = !isDebugVisible;
+                inputEvents[keptEvents++] = event;
             }
         }
+        inputEvents.resize(keptEvents);
 
         // BeginFrame may have recreated the swapchain.
         camera.SetTarget(device->GetSwapchainExtent(), device->GetSurfaceTransform());
@@ -536,6 +537,41 @@ void Application::StartFirstScene()
     {
         scene = game.CreateFirstScene();
     }
+}
+
+bool Application::TakeShortcut(const input::InputEvent& event)
+{
+    namespace keys = input::keys;
+    const bool isKeyDown = event.Type == input::InputEventType::KeyDown;
+    if (!isKeyDown && event.Type != input::InputEventType::KeyUp)
+    {
+        return false;
+    }
+    if (event.Code == keys::LEFT_ALT || event.Code == keys::RIGHT_ALT)
+    {
+        isAltHeld = isKeyDown;
+        return false;
+    }
+    if (!isKeyDown)
+    {
+        return false;
+    }
+    if (event.Code == keys::F1 && !event.IsRepeat)
+    {
+        isDebugVisible = !isDebugVisible;
+        return false;
+    }
+    const bool isEnter = event.Code == keys::RETURN || event.Code == keys::KEYPAD_ENTER;
+    if (event.Code == keys::F11 || (isEnter && isAltHeld))
+    {
+        if (!event.IsRepeat)
+        {
+            platform.SetFullscreen(!platform.IsFullscreen());
+        }
+        // The Enter goes no further, so it doesn't also press a button.
+        return isEnter;
+    }
+    return false;
 }
 
 void Application::RunScene(HostTimeNs now, float deltaSeconds)

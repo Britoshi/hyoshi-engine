@@ -80,6 +80,7 @@ constexpr uint32_t SEMICOLON = 51;
 constexpr uint32_t F1 = 58;
 constexpr uint32_t F2 = 59;
 constexpr uint32_t F5 = 62;
+constexpr uint32_t F11 = 68;
 constexpr uint32_t HOME = 74;
 constexpr uint32_t PAGE_UP = 75;
 constexpr uint32_t END = 77;
@@ -93,8 +94,10 @@ constexpr uint32_t KEYPAD_PLUS = 87;
 constexpr uint32_t KEYPAD_ENTER = 88;
 constexpr uint32_t LEFT_CTRL = 224;
 constexpr uint32_t LEFT_SHIFT = 225;
+constexpr uint32_t LEFT_ALT = 226;
 constexpr uint32_t RIGHT_CTRL = 228;
 constexpr uint32_t RIGHT_SHIFT = 229;
+constexpr uint32_t RIGHT_ALT = 230;
 
 } // namespace keys
 

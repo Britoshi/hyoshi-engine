@@ -59,7 +59,7 @@ The layer draws the menu bar (File, View), a dock space over the window whose em
 
 ## How a frame runs
 
-`Application::Run` pumps events, takes the input queue, toggles the overlay on F1, begins the sprite batch, and calls `Game::Update`. Then `RunScene` begins the UI frame (which reads the input), and the scene's `RunFrame` updates and draws in one call.
+`Application::Run` pumps events, takes the input queue, toggles the overlay on F1 and fullscreen on F11 or Alt+Enter (that Enter doesn't reach the scene), begins the sprite batch, and calls `Game::Update`. Then `RunScene` begins the UI frame (which reads the input), and the scene's `RunFrame` updates and draws in one call.
 
 A scene's `SwitchTo` takes effect after its `RunFrame`. `EndScene` logs the old scene's summary and keeps its failed checks and backward time steps for the exit checks, and the new scene runs from the next frame. The old scene is destroyed only after the frame has been recorded, because its sprites, and therefore its textures, are still in the frame's sprite batch.
 

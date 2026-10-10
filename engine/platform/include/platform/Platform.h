@@ -138,6 +138,15 @@ public:
     // Sets the window's logical size (desktop only; mobile windows are fullscreen).
     void SetWindowSize(int32_t width, int32_t height);
 
+    // Desktops: fill the window's display without a border, at the desktop's own resolution, or go
+    // back to a window. Phones are always fullscreen. On a Mac the window moves to its own Space,
+    // which takes a moment: IsFullscreen catches up once it has.
+    void SetFullscreen(bool isFullscreen);
+
+    // Whether the window fills its display, however it got there (SetFullscreen, or a Mac window's
+    // own button and menu).
+    bool IsFullscreen() const;
+
     // Hides the pointer and keeps it in the window while the window has focus, for aiming with
     // something else (a trackpad's positions on the pad). Pointer events still arrive, but their
     // positions stop moving. Desktop only; unlocking shows the pointer again.
