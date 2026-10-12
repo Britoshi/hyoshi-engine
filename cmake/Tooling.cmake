@@ -23,11 +23,11 @@ function(hyoshi_add_code_checks)
     set(tidySources ${formatSources})
     list(FILTER tidySources INCLUDE REGEX "\.cpp$")
     # clang-tidy reads this build's compile commands, so it checks only the GPU backend this build
-    # compiles: WebGPU for the web, Vulkan everywhere else.
+    # compiles: WebGPU (and its WebGL 2 fallback) for the web, Vulkan everywhere else.
     if(EMSCRIPTEN)
         list(FILTER tidySources EXCLUDE REGEX "/rhi/vulkan/")
     else()
-        list(FILTER tidySources EXCLUDE REGEX "/rhi/webgpu/")
+        list(FILTER tidySources EXCLUDE REGEX "/rhi/(webgpu|webgl|web)/")
     endif()
 
     if(HYOSHI_CLANG_FORMAT)

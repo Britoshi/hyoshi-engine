@@ -25,8 +25,9 @@
 #include <emscripten/em_js.h>
 
 // The browser draws the canvas and delivers input only while the page's code isn't running: give
-// control back until the next display frame. This needs JSPI (or Asyncify) at link time. The body
-// is JavaScript, which clang-format would break.
+// control back until the next display frame. This needs Asyncify at link time, which instruments
+// the calls from main to here (cmake/Platforms.cmake): keep them direct. The body is JavaScript,
+// which clang-format would break.
 // clang-format off
 EM_ASYNC_JS(void, WaitForAnimationFrame, (), { await new Promise((resolve) => requestAnimationFrame(resolve)); });
 // clang-format on
@@ -202,8 +203,10 @@ int Application::Run()
         }
 
         // Android destroys the native window in the background: release the surface, and recreate
-        // it on return (DESIGN.md section 7).
-        if (platform.IsSuspended())
+        // it on return (DESIGN.md section 7). A trip to the background and back within one pump
+        // still needs the new window's surface.
+        const bool wasSuspended = platform.ConsumeSuspension();
+        if (wasSuspended || platform.IsSuspended())
         {
             if (songs::SongPlayer* player = GetActivePlayer(); player != nullptr && !isAudioSuspended)
             {
@@ -218,8 +221,11 @@ int Application::Run()
             // Input from before or during the suspension is stale.
             platform.GetInputQueue().Take(inputEvents);
             device->DestroySurface();
-            platform.WaitForEvents();
-            continue;
+            if (platform.IsSuspended())
+            {
+                platform.WaitForEvents();
+                continue;
+            }
         }
         if (isAudioSuspended)
         {
@@ -412,6 +418,10 @@ hyoshi::Result<void> Application::Initialize()
     if (hyoshi::Result<void> result = platform.Initialize(platformConfig); !result)
     {
         return result;
+    }
+    for (const std::string& file : config.OpenedFiles)
+    {
+        platform.AddDroppedFile(file);
     }
 
     hyoshi::rhi::DeviceConfig deviceConfig;
@@ -660,6 +670,9 @@ void Application::RunScene(HostTimeNs now, float deltaSeconds)
     const bool isPointerCaptured = hasImGuiWindows && debugUi.WantsPointer();
     const hyoshi::platform::NormalizedRect safe = platform.GetSafeArea();
     ui->SetSafeArea({safe.X, safe.Y}, {safe.X + safe.Width, safe.Y + safe.Height});
+    // Typing goes to the debug UI while it has the keyboard.
+    std::string typed = platform.TakeTypedText();
+    ui->SetTypedText(isKeyboardCaptured ? std::string() : std::move(typed));
     ui->BeginFrame(inputEvents, canvas, deltaSeconds, spriteBatch, isPointerCaptured, isKeyboardCaptured);
 
     if (!scene)
@@ -680,6 +693,8 @@ void Application::RunScene(HostTimeNs now, float deltaSeconds)
     frame.IsKeyboardCaptured = isKeyboardCaptured;
     scene->RunFrame(frame, *ui);
     game.DrawOverlay(frame, *ui);
+    platform.SetTextInput(ui->IsTyping());
+    const SceneFade fade = scene->GetNextSceneFade();
     std::unique_ptr<Scene> next = scene->TakeNextScene();
     // The editor's choice (play mode, its own views) wins over the scene's.
     if (std::unique_ptr<Scene> editorNext = editorLayer != nullptr ? editorLayer->TakeNextScene() : nullptr)
@@ -690,7 +705,7 @@ void Application::RunScene(HostTimeNs now, float deltaSeconds)
     {
         endedScene = EndScene();
         scene = std::move(next);
-        sceneFade = 1.0f;
+        sceneFade = fade == SceneFade::FromBlack ? 1.0f : 0.0f;
     }
 }
 
@@ -843,7 +858,7 @@ void Application::RenderFrame(float deltaSeconds)
         spriteBatch.Draw(sprite);
     }
 
-    // Each new scene fades in from black.
+    // Each new scene fades in from black, unless the one before asked for none (SceneFade).
     if (sceneFade > 0.0f)
     {
         spriteBatch.DrawRect({0.0f, 0.0f}, canvas, {0, 0, 0, static_cast<uint8_t>(sceneFade * 255.0f)},

@@ -3,6 +3,7 @@ add_library(hyoshi_mania STATIC
     src/ArcaeaJudge.cpp
     src/ManiaJudge.cpp
     src/ManiaPlayfield.cpp
+    src/StepManiaImport.cpp
 )
 add_library(hyoshi::mania ALIAS hyoshi_mania)
 

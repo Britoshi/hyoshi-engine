@@ -30,7 +30,7 @@ enum class Shape : uint32_t
     // Gray with a light rim.
     HitCircle,
     Ring,
-    // A chevron pointing right: a slider's reverse arrow.
+    // A white chevron pointing right, outlined dark: a slider's reverse arrow.
     Arrow,
     Count
 };
@@ -77,6 +77,18 @@ constexpr float TICK_SIZE = 0.16f;
 constexpr Color TICK_TINT{255, 255, 255, 230};
 // The follow circle around a followed slider's ball: as far as following reaches.
 constexpr Color FOLLOW_CIRCLE_TINT{255, 255, 255, 140};
+// In combo colors: colors lighter than this (relative luminance, 0 to 1) at the least, a rim, a
+// dark halo this much larger than a note, approach circles this far to white, and slider bodies
+// their color this dark.
+constexpr float MIN_COMBO_LUMINANCE = 0.3f;
+constexpr Color RIM_TINT{245, 245, 250, 255};
+constexpr Color HALO_TINT{0, 0, 0, 140};
+constexpr float HALO_SCALE = 1.1f;
+constexpr float APPROACH_LIGHTEN = 0.35f;
+constexpr float BODY_SHADE = 0.45f;
+// Notes due together glow this much larger than a note, this strongly.
+constexpr float SHINE_SCALE = 1.3f;
+constexpr float SHINE_ALPHA = 0.75f;
 constexpr float FOLLOW_CIRCLE_SCALE = FOLLOW_RADIUS_SCALE;
 constexpr Color SPINNER_TINT{255, 255, 255, 170};
 constexpr float SPINNER_SIZE = 0.8f * PLAYFIELD_HEIGHT;
@@ -144,8 +156,12 @@ glm::vec4 ShapeTexel(Shape shape, glm::vec2 point)
         const glm::vec2 top{-SHAPE_RADIUS * 0.35f, -SHAPE_RADIUS * 0.55f};
         const glm::vec2 bottom{-SHAPE_RADIUS * 0.35f, SHAPE_RADIUS * 0.55f};
         const float halfWidth = SHAPE_RADIUS * 0.14f;
+        const float outline = SHAPE_RADIUS * 0.07f;
+        const float outlineAlpha = 0.85f;
         const float fromLines = std::min(DistanceToSegment(point, top, tip), DistanceToSegment(point, tip, bottom));
-        return {1.0f, 1.0f, 1.0f, Coverage(halfWidth - fromLines)};
+        const float white = Coverage(halfWidth - fromLines);
+        const float gray = glm::mix(0.08f, 1.0f, white);
+        return {gray, gray, gray, std::max(white, outlineAlpha * Coverage(halfWidth + outline - fromLines))};
     }
     case Shape::Count:
         break;
@@ -263,17 +279,17 @@ Color GetMarkTint(Judgment result)
     return MISS_TINT;
 }
 
-const char* GetMarkText(Judgment result)
+const char* GetMarkText(Judgment result, const CirclePlayfieldStyle& style)
 {
     switch (result)
     {
     case Judgment::Perfect:
     case Judgment::Great:
-        return "300";
+        return style.MarkTexts[0];
     case Judgment::Good:
-        return "100";
+        return style.MarkTexts[1];
     case Judgment::Bad:
-        return "50";
+        return style.MarkTexts[2];
     case Judgment::Miss:
     case Judgment::Count:
         break;
@@ -461,6 +477,8 @@ void CirclePlayfield::Draw(renderer::SpriteBatch& sprites, renderer::TextRendere
         }
         if (notes[i].Type == NoteType::Slider)
         {
+            // Over the head, not under the body: neither it nor a later note can hide them.
+            DrawReverseArrows(frame, i);
             DrawSliderBall(frame, i);
         }
     }
@@ -517,6 +535,17 @@ void CirclePlayfield::DrawFollowPoints(const Frame& frame)
 // The body is a run of overlapping discs along the path: the border color, then the fill color
 // smaller on top. The discs are opaque, so the body can't fade: it snakes in at full strength,
 // under its fading head.
+// The note's combo color, lightened if too dark to read, if it has one to draw.
+std::optional<Color> CirclePlayfield::GetComboColor(const Frame& frame, const CircleNote& note)
+{
+    const std::vector<glm::vec3>& colors = frame.Chart.ComboColors;
+    if (!frame.Style.AreComboColorsShown || colors.empty())
+    {
+        return std::nullopt;
+    }
+    return renderer::ToLightColor(colors[note.ComboColor % colors.size()], MIN_COMBO_LUMINANCE);
+}
+
 void CirclePlayfield::DrawSliderBody(const Frame& frame, uint32_t index) const
 {
     const CircleNote& note = frame.Chart.Notes[index];
@@ -555,8 +584,13 @@ void CirclePlayfield::DrawSliderBody(const Frame& frame, uint32_t index) const
     const auto lastInRange = static_cast<uint32_t>(std::floor(end * static_cast<float>(last)));
     const glm::vec2 startPosition = GetPathPosition(frame.Chart, note, start);
     const glm::vec2 endPosition = GetPathPosition(frame.Chart, note, end);
+    // In a combo color: a light rim around a dark body of that color.
+    const std::optional<Color> combo = GetComboColor(frame, note);
+    const Color border = combo ? RIM_TINT : BODY_BORDER;
+    const auto shade = [](uint8_t value) { return static_cast<uint8_t>(std::lround(value * BODY_SHADE)); };
+    const Color fill = combo ? Color{shade(combo->R), shade(combo->G), shade(combo->B), 255} : BODY_FILL;
     for (const auto& [size, tint] :
-         {std::pair{frame.Diameter, BODY_BORDER}, std::pair{frame.Diameter * BODY_FILL_SCALE, BODY_FILL}})
+         {std::pair{frame.Diameter, border}, std::pair{frame.Diameter * BODY_FILL_SCALE, fill}})
     {
         frame.DrawShape(Shape::Disc, startPosition, size, tint, BODY_LAYER);
         for (uint32_t p = first; p <= lastInRange && p <= last; ++p)
@@ -566,26 +600,41 @@ void CirclePlayfield::DrawSliderBody(const Frame& frame, uint32_t index) const
         frame.DrawShape(Shape::Disc, endPosition, size, tint, BODY_LAYER);
     }
     DrawTicks(frame, index, start, end);
+}
 
-    // Reverse arrows at the ends the ball has yet to turn back from.
+// Reverse arrows at the ends the ball has yet to turn back from, once the body reaches them, over
+// the notes (the start's once the ball has left it, so it's never on the head's number).
+void CirclePlayfield::DrawReverseArrows(const Frame& frame, uint32_t index) const
+{
+    const CircleNote& note = frame.Chart.Notes[index];
+    const SongTimeUs untilHit = note.Time - frame.Time;
     const uint32_t passes = std::max<uint32_t>(note.Passes, 1);
+    if (note.PathPointCount < 2 || passes < 2 || untilHit > frame.ApproachUs || frame.Time > note.EndTime)
+    {
+        return;
+    }
+    const bool isActive = untilHit <= 0;
+    // The last pass has none, so the body is whole while there are any; it only snakes in.
+    const bool isSnakedIn = isActive || (SNAKE_START - Ratio(untilHit, frame.ApproachUs)) * SNAKE_SPEED >= 1.0f;
     bool isArrowAtEnd = false;
     bool isArrowAtStart = false;
-    for (uint32_t pass = isActive ? ball.Pass : 0; pass + 1 < passes; ++pass)
+    for (uint32_t pass = isActive ? GetBallProgress(note, frame.Time).Pass : 0; pass + 1 < passes; ++pass)
     {
         (pass % 2 == 0 ? isArrowAtEnd : isArrowAtStart) = true;
     }
+    const glm::vec2* path = &frame.Chart.Path[note.FirstPathPoint];
+    const uint32_t last = note.PathPointCount - 1;
     const float arrowSize = frame.Diameter * ARROW_SIZE;
-    if (isArrowAtEnd && end >= 1.0f)
+    if (isArrowAtEnd && isSnakedIn)
     {
         const glm::vec2 along = path[last] - path[last - 1];
-        frame.DrawShape(Shape::Arrow, path[last] + note.StackOffset, arrowSize, NOTE_TINT, BODY_LAYER,
+        frame.DrawShape(Shape::Arrow, path[last] + note.StackOffset, arrowSize, NOTE_TINT, NOTE_LAYER,
                         std::atan2(-along.y, -along.x));
     }
-    if (isArrowAtStart && start <= 0.0f)
+    if (isArrowAtStart && isActive)
     {
         const glm::vec2 along = path[1] - path[0];
-        frame.DrawShape(Shape::Arrow, path[0] + note.StackOffset, arrowSize, NOTE_TINT, BODY_LAYER,
+        frame.DrawShape(Shape::Arrow, path[0] + note.StackOffset, arrowSize, NOTE_TINT, NOTE_LAYER,
                         std::atan2(along.y, along.x));
     }
 }
@@ -603,7 +652,23 @@ void CirclePlayfield::DrawHead(const Frame& frame, uint32_t index) const
         return;
     }
     const glm::vec2 head = GetHeadPosition(frame.Chart, note);
-    frame.DrawShape(Shape::HitCircle, head, frame.Diameter, WithAlpha(NOTE_TINT, alpha), NOTE_LAYER);
+    // Due with another: a glow around it.
+    if (note.IsSimultaneous)
+    {
+        frame.DrawShape(Shape::Disc, head, frame.Diameter * SHINE_SCALE,
+                        WithAlpha(renderer::SHINE, alpha * SHINE_ALPHA), NOTE_LAYER);
+    }
+    if (const std::optional<Color> combo = GetComboColor(frame, note))
+    {
+        // A dark halo, the circle in its color, and a light rim: readable on any background.
+        frame.DrawShape(Shape::Disc, head, frame.Diameter * HALO_SCALE, WithAlpha(HALO_TINT, alpha), NOTE_LAYER);
+        frame.DrawShape(Shape::HitCircle, head, frame.Diameter, WithAlpha(*combo, alpha), NOTE_LAYER);
+        frame.DrawShape(Shape::Ring, head, frame.Diameter, WithAlpha(RIM_TINT, alpha), NOTE_LAYER);
+    }
+    else
+    {
+        frame.DrawShape(Shape::HitCircle, head, frame.Diameter, WithAlpha(NOTE_TINT, alpha), NOTE_LAYER);
+    }
     if (frame.Style.AreComboNumbersShown)
     {
         frame.DrawText(std::to_string(note.ComboNumber), head, frame.Diameter * NUMBER_SIZE,
@@ -619,7 +684,7 @@ void CirclePlayfield::DrawSliderBall(const Frame& frame, uint32_t index) const
         return;
     }
     const glm::vec2 ball = GetBallPosition(frame.Chart, note, frame.Time);
-    frame.DrawShape(Shape::Disc, ball, frame.Diameter, BODY_BORDER, NOTE_LAYER);
+    frame.DrawShape(Shape::Disc, ball, frame.Diameter, GetComboColor(frame, note).value_or(BODY_BORDER), NOTE_LAYER);
     frame.DrawShape(Shape::Ring, ball, frame.Diameter, NOTE_TINT, NOTE_LAYER);
     frame.DrawShape(Shape::Ring, ball, frame.Diameter * 0.8f, NOTE_TINT, NOTE_LAYER);
     if (frame.Judge.IsFollowing(index))
@@ -637,8 +702,21 @@ void CirclePlayfield::DrawApproach(const Frame& frame, uint32_t index) const
         return;
     }
     const float scale = 1.0f + (Ratio(untilHit, frame.ApproachUs) * (APPROACH_START_SCALE - 1.0f));
-    frame.DrawShape(Shape::Ring, GetHeadPosition(frame.Chart, note), frame.Diameter * scale,
-                    WithAlpha(NOTE_TINT, GetNoteAlpha(note, frame.Time, frame.ApproachUs)), APPROACH_LAYER);
+    const float alpha = GetNoteAlpha(note, frame.Time, frame.ApproachUs);
+    const glm::vec2 head = GetHeadPosition(frame.Chart, note);
+    const std::optional<Color> combo = GetComboColor(frame, note);
+    if (!combo)
+    {
+        frame.DrawShape(Shape::Ring, head, frame.Diameter * scale, WithAlpha(NOTE_TINT, alpha), APPROACH_LAYER);
+        return;
+    }
+    // Its combo's color toward white, over a dark ring just outside it.
+    const auto lighten = [](uint8_t value)
+    { return static_cast<uint8_t>(std::lround(value + ((255.0f - value) * APPROACH_LIGHTEN))); };
+    frame.DrawShape(Shape::Ring, head, frame.Diameter * scale * 1.04f, WithAlpha(HALO_TINT, alpha), APPROACH_LAYER);
+    frame.DrawShape(Shape::Ring, head, frame.Diameter * scale,
+                    WithAlpha(Color{lighten(combo->R), lighten(combo->G), lighten(combo->B), 255}, alpha),
+                    APPROACH_LAYER);
 }
 
 // A ring that fades in like a note, with a second ring inside it that empties over the spin.
@@ -699,8 +777,8 @@ void CirclePlayfield::DrawFeedback(const Frame& frame, uint32_t index) const
     {
         const float grown = Ratio(popAge, POP_US);
         frame.DrawShape(Shape::HitCircle, GetHeadPosition(frame.Chart, note),
-                        frame.Diameter * (1.0f + (POP_GROWTH * grown)), WithAlpha(NOTE_TINT, 1.0f - grown),
-                        FEEDBACK_LAYER);
+                        frame.Diameter * (1.0f + (POP_GROWTH * grown)),
+                        WithAlpha(GetComboColor(frame, note).value_or(NOTE_TINT), 1.0f - grown), FEEDBACK_LAYER);
     }
 
     const SongTimeUs age = frame.Time - result.Time;
@@ -727,7 +805,7 @@ void CirclePlayfield::DrawFeedback(const Frame& frame, uint32_t index) const
         }
         return;
     }
-    frame.DrawText(GetMarkText(result.Result), head, size * 0.6f, tint, FEEDBACK_LAYER);
+    frame.DrawText(GetMarkText(result.Result, frame.Style), head, size * 0.6f, tint, FEEDBACK_LAYER);
 }
 
 // Follow points join each step of a combo to the next, where a step is a note or a chord. Into a

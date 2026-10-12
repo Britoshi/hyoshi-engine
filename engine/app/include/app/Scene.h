@@ -5,6 +5,7 @@
 
 #include <glm/vec2.hpp>
 
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <utility>
@@ -33,6 +34,14 @@ struct FrameContext
     float DeltaSeconds = 0.0f;
     // The debug UI has the keyboard, so gameplay ignores keys.
     bool IsKeyboardCaptured = false;
+};
+
+// How a new scene comes in: fading in from black, or at once, for a scene that ended on what the
+// next one begins with (a plain background, say), so the change doesn't show.
+enum class SceneFade : uint8_t
+{
+    FromBlack,
+    None
 };
 
 class Scene
@@ -76,14 +85,22 @@ public:
         return std::exchange(nextScene, nullptr);
     }
 
+    // How the scene asked for comes in.
+    SceneFade GetNextSceneFade() const
+    {
+        return nextSceneFade;
+    }
+
 protected:
-    void SwitchTo(std::unique_ptr<Scene> next)
+    void SwitchTo(std::unique_ptr<Scene> next, SceneFade fade = SceneFade::FromBlack)
     {
         nextScene = std::move(next);
+        nextSceneFade = fade;
     }
 
 private:
     std::unique_ptr<Scene> nextScene;
+    SceneFade nextSceneFade = SceneFade::FromBlack;
 };
 
 } // namespace hyoshi::app

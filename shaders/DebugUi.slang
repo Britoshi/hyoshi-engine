@@ -1,4 +1,5 @@
 // Dear ImGui draw lists: textured, vertex-colored triangles in logical pixels.
+// WebGL 2 builds use a hand-written GLSL ES copy (engine/debug/src/DebugUiGles.h): change both.
 
 struct DrawConstants
 {

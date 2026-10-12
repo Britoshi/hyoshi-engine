@@ -1,18 +1,21 @@
-# Vulkan everywhere but the web, which draws with WebGPU (Emscripten's emdawnwebgpu port).
+# Vulkan everywhere but the web, which draws with WebGPU (Emscripten's emdawnwebgpu port), or
+# with WebGL 2 where the browser has no WebGPU (web/WebRenderDevice.cpp picks).
 if(EMSCRIPTEN)
     add_library(hyoshi_rhi STATIC
+        web/WebRenderDevice.cpp
+        webgl/WebGlRenderDevice.cpp
         webgpu/WebGpuRenderDevice.cpp
     )
     add_library(hyoshi::rhi ALIAS hyoshi_rhi)
 
-    target_include_directories(hyoshi_rhi PUBLIC include PRIVATE webgpu)
+    target_include_directories(hyoshi_rhi PUBLIC include PRIVATE webgpu webgl)
     target_link_libraries(hyoshi_rhi
         PUBLIC hyoshi::core
         PRIVATE hyoshi::platform
     )
     # The port adds webgpu.h when compiling and its JavaScript library when linking the app.
     target_compile_options(hyoshi_rhi PUBLIC --use-port=emdawnwebgpu)
-    target_link_options(hyoshi_rhi PUBLIC --use-port=emdawnwebgpu)
+    target_link_options(hyoshi_rhi PUBLIC --use-port=emdawnwebgpu -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2)
     # The module scanner runs clang directly, without emcc's port flags, so it can't find webgpu.h.
     set_target_properties(hyoshi_rhi PROPERTIES CXX_SCAN_FOR_MODULES OFF)
     hyoshi_set_warnings(hyoshi_rhi)

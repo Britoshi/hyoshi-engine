@@ -169,6 +169,11 @@ GameplayAction Move(SongTimeUs time, glm::vec2 position, uint32_t pointer = 0)
     return MakeAction(CircleAction::Move, pointer, position, time);
 }
 
+GameplayAction Touch(SongTimeUs time, glm::vec2 position, uint32_t pointer = 0)
+{
+    return MakeAction(CircleAction::Touch, pointer, position, time);
+}
+
 // Graded results: one per circle and slider head, the timed events.
 size_t CountResults(const std::vector<JudgmentEvent>& events)
 {
@@ -295,6 +300,29 @@ TEST_CASE("osu!standard import: notes, combos, sliders, timing, and metadata")
     CHECK(spinner.EndTime == 5'000'000);
 }
 
+TEST_CASE("osu!standard import: combo colors in order, each new combo the next past its skip")
+{
+    // Three colors, written out of order; the second slider skips one color.
+    const std::string text = WithLine(WithLine(OSU_STANDARD, "[Events]\n",
+                                               "[Colours]\nCombo2 : 0,255,0\nCombo1 : 255,0,0\nCombo3 : 0,0,255\n\n"
+                                               "[Events]\n"),
+                                      "300,200,3000,6,", "300,200,3000,22,");
+    const CircleChart chart = ImportChart(text);
+    REQUIRE(chart.ComboColors.size() == 3);
+    CHECK(chart.ComboColors[0].r == doctest::Approx(1.0f));
+    CHECK(chart.ComboColors[1].g == doctest::Approx(1.0f));
+    REQUIRE(chart.Notes.size() == 6);
+    // The first combo, three notes; the slider past one skipped color; the spinner the next; the
+    // note after it the next again, round to the second color.
+    const std::vector<uint32_t> expected{0, 0, 0, 2, 3, 4};
+    for (size_t i = 0; i < chart.Notes.size(); ++i)
+    {
+        CAPTURE(i);
+        CHECK(chart.Notes[i].ComboColor == expected[i]);
+    }
+    CHECK(chart.Notes[5].ComboColor % chart.ComboColors.size() == 1);
+}
+
 TEST_CASE("osu!standard import: a red line resets slider velocity")
 {
     // 2x from 2 s, so the first slider takes half a beat. A red line at 2.9 s puts the second back
@@ -395,6 +423,41 @@ TEST_CASE("Circle judge: presses are graded by timing, and unstruck notes miss")
     CHECK(events[3].Time == 4'150'001);
     CHECK(judge.GetNoteState(3) == NoteState::Missed);
     CHECK(judge.IsFinished());
+}
+
+TEST_CASE("Circle judge and score: a game's own windows and values replace OD's")
+{
+    const CircleChart chart = MakeChart({Circle(1'000'000, {100.0f, 100.0f}), Circle(2'000'000, {100.0f, 100.0f}),
+                                         Circle(3'000'000, {100.0f, 100.0f})});
+    // Phigros's: Great within 80 ms, Good within 160, and no Bad.
+    const hyoshi::circle::CircleWindows windows{80'000, 160'000, 160'000};
+    CircleJudge judge;
+    judge.Reset(chart, windows);
+    CircleScore score;
+    score.Reset(chart, {300, 195, 0});
+    std::vector<JudgmentEvent> events;
+
+    judge.ProcessAction(Press(1'075'000, {100.0f, 100.0f}), events);
+    judge.ProcessAction(Release(1'080'000, {100.0f, 100.0f}), events);
+    // Late for any of OD 5's windows (a 50 within 150 ms), but a Good here.
+    judge.ProcessAction(Press(2'155'000, {100.0f, 100.0f}), events);
+    judge.ProcessAction(Release(2'165'000, {100.0f, 100.0f}), events);
+    // Earlier than 160 ms does nothing; the note then misses.
+    judge.ProcessAction(Press(2'830'000, {100.0f, 100.0f}), events);
+    judge.ProcessAction(Release(2'840'000, {100.0f, 100.0f}), events);
+    judge.Advance(3'200'000, events);
+
+    REQUIRE(events.size() == 3);
+    CHECK(events[0].Result == Judgment::Great);
+    CHECK(events[1].Result == Judgment::Good);
+    CHECK(events[2].Result == Judgment::Miss);
+    CHECK(judge.GetWindows().MehUs == 160'000);
+    for (const JudgmentEvent& event : events)
+    {
+        score.Add(event);
+    }
+    // (300 + 195 + 0) of 900.
+    CHECK(score.GetAccuracyBasisPoints() == 5'500);
 }
 
 TEST_CASE("Circle judge: note lock blocks early presses, then force-misses skipped circles")
@@ -671,6 +734,38 @@ TEST_CASE("Circle sliders: held through without striking the head, the rest is s
         score.Add(event);
     }
     CHECK(score.GetMaxCombo() == 1);
+}
+
+TEST_CASE("Circle judge: a touch follows sliders without striking, and press targets are found")
+{
+    CircleChart chart;
+    chart.Difficulty.CircleSize = 4.0f;
+    chart.Difficulty.OverallDifficulty = 5.0f;
+    chart.Difficulty.StackLeniency = 0.0f;
+    chart.ControlPoints = {{200.0f, 200.0f}, {300.0f, 200.0f}};
+    chart.Notes = {Slider(1'000'000, 1'500'000, {200.0f, 200.0f}, 0, 100.0f), Circle(2'000'000, {400.0f, 300.0f})};
+    chart.Notes[0].IsNewCombo = true;
+    FinishCircleChart(chart);
+
+    CircleJudge judge;
+    judge.Reset(chart);
+    // A press on the head, in its window, would strike it; one elsewhere, or long before, nothing.
+    CHECK(judge.GetPressTarget({200.0f, 200.0f}, 990'000) == 1'000'000);
+    CHECK_FALSE(judge.GetPressTarget({400.0f, 300.0f}, 990'000).has_value());
+    CHECK_FALSE(judge.GetPressTarget({200.0f, 200.0f}, 500'000).has_value());
+
+    // A finger down for another mode's note, on the head at its time: it strikes nothing (the
+    // head misses), but follows the slider to its end.
+    std::vector<JudgmentEvent> events;
+    judge.ProcessAction(Touch(1'010'000, {200.0f, 200.0f}, 1), events);
+    CHECK(judge.GetNoteState(0) == NoteState::Pending);
+    judge.ProcessAction(Move(1'460'000, {292.0f, 200.0f}, 1), events);
+    judge.Advance(1'600'000, events);
+    REQUIRE(events.size() == 2);
+    CheckPart(events[0], 0, 1, Judgment::Miss);
+    CheckPart(events[1], 0, 2, Judgment::Great);
+    // Struck by a press, the circle after it is the target.
+    CHECK(judge.GetPressTarget({400.0f, 300.0f}, 2'000'000) == 2'000'000);
 }
 
 TEST_CASE("osu!standard import: hit sounds, from the notes and the sample points")

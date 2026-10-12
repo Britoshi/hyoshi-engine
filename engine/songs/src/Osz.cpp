@@ -5,9 +5,11 @@
 #include <miniz.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
 #include <span>
 #include <system_error>
 #include <vector>
@@ -59,6 +61,27 @@ bool IsOszPath(std::string_view path)
     return path.size() > EXTENSION.size() &&
            std::equal(EXTENSION.begin(), EXTENSION.end(), path.end() - static_cast<std::ptrdiff_t>(EXTENSION.size()),
                       [](char a, char b) { return a == std::tolower(static_cast<unsigned char>(b)); });
+}
+
+bool IsMapArchive(const std::string& path)
+{
+    const std::filesystem::path file(path);
+    std::string extension = file.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (extension == ".osz" || extension == ".pez" || extension == ".zip")
+    {
+        return true;
+    }
+    if (!extension.empty())
+    {
+        return false;
+    }
+    // A zip archive starts with a local file header: "PK", 3, 4.
+    std::ifstream stream(file, std::ios::binary);
+    std::array<char, 4> magic{};
+    return stream.read(magic.data(), magic.size()) && magic[0] == 'P' && magic[1] == 'K' && magic[2] == 3 &&
+           magic[3] == 4;
 }
 
 std::optional<std::string> ToMapRelativePath(std::string_view entry)
@@ -159,6 +182,21 @@ Result<UnpackedOsz> UnpackOsz(const std::string& archivePath, const std::string&
     if (result && entries.empty())
     {
         result = Error{"'" + archivePath + "' holds no files"};
+    }
+    // An archive whose files are all in one folder (a StepMania pack's, say) unpacks that folder's
+    // contents: the map folder has the archive's name already, and paths stay short.
+    if (result)
+    {
+        const size_t slash = entries.front().Path.find('/');
+        const std::string top = slash == std::string::npos ? std::string() : entries.front().Path.substr(0, slash + 1);
+        if (!top.empty() && std::all_of(entries.begin(), entries.end(),
+                                        [&top](const Entry& entry) { return entry.Path.starts_with(top); }))
+        {
+            for (Entry& entry : entries)
+            {
+                entry.Path.erase(0, top.size());
+            }
+        }
     }
 
     for (const Entry& entry : entries)

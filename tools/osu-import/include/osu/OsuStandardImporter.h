@@ -30,6 +30,7 @@ namespace hyoshi::osu
 // - Slider ticks: every SliderMultiplier * 100 * velocity / SliderTickRate units along the path
 //   (without the velocity before format v8).
 // - The background image from [Events], AudioLeadIn, and PreviewTime.
+// - Combo colors from [Colours] (Combo1 on, in order), and each new combo's color skip.
 // - Files older than format v5 get osu!'s 24 ms offset.
 // - A slider with a single control point is imported as a circle, with a warning. Curve type
 //   changes inside a slider (lazer's newer format) are read as one curve, with a warning.

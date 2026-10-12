@@ -206,6 +206,22 @@ public:
     bool IsKeyHeld(uint32_t code) const;
     bool IsControlHeld() const;
 
+    // This frame's typed text (UTF-8), from the platform's text input. Call before BeginFrame.
+    void SetTypedText(std::string typed)
+    {
+        typedText = std::move(typed);
+    }
+
+    // A text field has focus, so the keyboard types: scenes should leave letter keys alone, and the
+    // platform's text input should be on.
+    bool IsTyping() const
+    {
+        return focusedField != 0;
+    }
+
+    // Gives the text field with this id focus, as if tapped (a key that starts a search).
+    void FocusTextField(std::string_view id);
+
     // Pointer, in canvas units.
     glm::vec2 GetPointer() const
     {
@@ -269,6 +285,12 @@ public:
                 std::string_view valueText);
     // A label and a row of options, one of them selected; returns true when the choice changed.
     bool Choice(const Rect& rect, std::string_view label, std::span<const std::string_view> options, size_t& selected);
+    // A one-line text field editing `value`: a click or tap gives it focus, and Enter, Escape, or a
+    // click elsewhere takes it away (those keys go no further). While it has focus, typed text adds
+    // to the end and Backspace takes off the last character; the other keys still reach the scene
+    // (arrows to move through what the text finds). Its x clears it. Returns true when the text
+    // changed.
+    bool TextField(const Rect& rect, std::string& value, std::string_view placeholder, std::string_view id);
     // Whether the pointer is over the rectangle, with input enabled.
     bool IsHovered(const Rect& rect) const;
     // A click on an area that isn't a button (list rows): the press and release inside it.
@@ -330,6 +352,9 @@ private:
     float wheel = 0.0f;
     // The widget being pressed.
     uint64_t activeId = 0;
+    // The text field with focus, or 0.
+    uint64_t focusedField = 0;
+    std::string typedText;
 };
 
 } // namespace hyoshi::ui

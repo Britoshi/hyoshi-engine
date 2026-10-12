@@ -9,6 +9,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // yyjson's own type names; the library stays a private dependency.
 struct yyjson_val;     // NOLINT(readability-identifier-naming)
@@ -46,6 +47,16 @@ public:
     // A missing field is an empty array.
     Result<void> ForEachObject(std::string_view key,
                                const std::function<Result<void>(const ChartFields&, size_t)>& fn) const;
+    // The same, but a null field is an empty array and null elements are skipped, as some formats
+    // write them for what's unused.
+    Result<void> ForEachPresentObject(std::string_view key,
+                                      const std::function<Result<void>(const ChartFields&, size_t)>& fn) const;
+    // An array of numbers, such as [1, 2, 4].
+    Result<std::vector<double>> GetNumbers(std::string_view key) const;
+    // An array of strings.
+    Result<std::vector<std::string>> GetStrings(std::string_view key) const;
+    // A nested object.
+    Result<ChartFields> GetObject(std::string_view key) const;
 
 private:
     const yyjson_val* Find(std::string_view key) const;

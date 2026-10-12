@@ -3,6 +3,7 @@
 #include "core/Time.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,7 +21,30 @@ struct ChartMetadata
     std::string DifficultyName;
     double DifficultyValue = 0.0;
     SongTimeUs PreviewStartUs = 0;
+    // The pack (a collection of songs) the chart belongs to, for a game to group songs by; empty
+    // for none.
+    std::string Pack;
+    // osu!'s overall difficulty (OD, 0 to 10), from an osu! import: how tight its hit windows are.
+    // A game may judge by it or not.
+    std::optional<double> OverallDifficulty;
 };
+
+// Notes due within this of another are due together (a chord): every mode's playfield makes them
+// shine alike (renderer::SHINE), so a chord reads the same way in any of them.
+constexpr SongTimeUs SIMULTANEOUS_US = 1'000;
+
+// Marks each note of a list sorted by time that's due together with another (its IsSimultaneous).
+// It only sets the mark, so marks from elsewhere (notes of another mode due with them) stay.
+template <typename Note>
+void MarkSimultaneous(std::vector<Note>& notes)
+{
+    for (size_t i = 0; i < notes.size(); ++i)
+    {
+        const bool isWithPrevious = i > 0 && notes[i].Time - notes[i - 1].Time <= SIMULTANEOUS_US;
+        const bool isWithNext = i + 1 < notes.size() && notes[i + 1].Time - notes[i].Time <= SIMULTANEOUS_US;
+        notes[i].IsSimultaneous = notes[i].IsSimultaneous || isWithPrevious || isWithNext;
+    }
+}
 
 struct TimingPoint
 {

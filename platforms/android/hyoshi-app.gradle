@@ -10,6 +10,9 @@
 // build installs (the engine's fonts and logos, the game's assets) as APK assets, and in debug
 // builds bundles the game's local maps (content/charts). The pinned versions are in the engine's
 // docs/REFERENCES.md.
+//
+// -PhyoshiSongs="Folder;Other folder" bundles just those folders of content/charts instead, in
+// every build, release too: a test build for someone else with the maps they're to play.
 
 def engineDir = ext.hyoshiEngineDir
 def gameDir = ext.hyoshiGameDir
@@ -35,7 +38,10 @@ android {
         }
         externalNativeBuild {
             cmake {
+                // Native code aligned for 16 KB pages, as Android 15 devices can use and Google Play
+                // requires (NDK r28 does this by default).
                 arguments '-DANDROID_STL=c++_static',
+                          '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON',
                           '-DHYOSHI_BUILD_TESTS=OFF',
                           '-DHYOSHI_BUILD_SAMPLES=OFF',
                           "-DHYOSHI_ANDROID_ASSETS_DIR=${nativeAssets.path.replace('\\', '/')}",
@@ -87,7 +93,7 @@ tasks.configureEach { task ->
     }
 }
 
-// Copies the game's maps (content/charts) into dev-songs/, with an index of the files and their
+// Copies the game's maps (content/charts) into bundled-songs/, with an index of the files and their
 // sizes (an APK's assets can't be listed at run time). The game unpacks them on launch
 // (hyoshi::songs::UnpackBundledSongs), so a debug install has songs, like a desktop build reading
 // content/charts.
@@ -104,7 +110,10 @@ abstract class BundleDevSongs extends DefaultTask {
 
     @TaskAction
     void bundle() {
-        def songs = new File(outputDir.get().asFile, 'dev-songs')
+        // Named apart from the folder the game unpacks them into (dev-songs, in its files): SDL reads
+        // a relative path from the app's files before its assets, so under one name the game would
+        // read back its old copies instead of the APK's, and changed maps would never update.
+        def songs = new File(outputDir.get().asFile, 'bundled-songs')
         songs.deleteDir()
         songs.mkdirs()
         def root = chartsRoot.get().asFile.toPath()
@@ -121,18 +130,27 @@ abstract class BundleDevSongs extends DefaultTask {
 }
 
 def chartsDir = new File(gameDir, 'content/charts')
+// The folders -PhyoshiSongs names, or none for all of them.
+def chosenSongs = (project.findProperty('hyoshiSongs') ?: '').toString().split(';')*.trim().findAll { !it.isEmpty() }
+chosenSongs.each { folder ->
+    if (!new File(chartsDir, folder).isDirectory()) {
+        throw new GradleException("hyoshiSongs: no folder '${folder}' in ${chartsDir}")
+    }
+}
 def bundleDevSongs = tasks.register('bundleDevSongs', BundleDevSongs) {
     // Videos stay behind: the game doesn't play them, and they're the biggest files. The APK
     // packer drops dotfiles (.gitkeep), so they're left out of the index too.
     charts.from(fileTree(chartsDir) {
+        chosenSongs.each { folder -> include "${folder}/**" }
         exclude '**/*.mp4', '**/*.avi', '**/*.flv', '**/*.wmv', '**/*.mkv', '**/*.webm', '**/.*'
     })
     chartsRoot.set(chartsDir)
 }
 
-// Debug builds only. Release builds never carry them: they're local test maps, often copyrighted.
+// Debug builds, unless the build names its maps. Release builds otherwise never carry them: they're
+// local test maps, often copyrighted, so a build that names some is for testers, not a store.
 androidComponents {
-    onVariants(selector().withBuildType('debug')) { variant ->
+    onVariants(chosenSongs.isEmpty() ? selector().withBuildType('debug') : selector().all()) { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(bundleDevSongs) { it.outputDir }
     }
 }

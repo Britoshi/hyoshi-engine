@@ -27,8 +27,9 @@ struct ArcaeaWindows
 //   Great (Pure) within 50, Good (Far) within 100. A tap not struck by then is missed (Lost).
 // - A hold isn't struck or released: it's a combo for every half beat of it (every beat from
 //   255 BPM), each Perfect (a max Pure, as Arcaea counts them) while its lane is held at that
-//   moment and missed if not. It can be pressed any time, and letting go only loses the combos
-//   until it's held again. Its first combo also takes a press within Far either side of its start.
+//   moment and missed if not. It can be pressed (or touched: ManiaAction::Touch) any time, and
+//   letting go only loses the combos until it's held again. Its first combo also takes a press
+//   within Far either side of its start.
 class ArcaeaJudge : public ILaneJudge
 {
 public:
@@ -73,7 +74,9 @@ private:
         SongTimeUs CheckTime = 0;
         uint32_t Note = 0;
         bool IsFirst = false;
-        bool IsLast = false;
+        // Not a combo: the hold's end, which finishes it. Its last combo comes up to a combo's
+        // length before, and the hold is drawn until it ends.
+        bool IsEnd = false;
     };
 
     std::optional<uint32_t> FindTap(uint32_t lane, SongTimeUs at) const;

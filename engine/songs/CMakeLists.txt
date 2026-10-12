@@ -1,5 +1,6 @@
 add_library(hyoshi_songs STATIC
     src/Charts.cpp
+    src/Medley.cpp
     src/CircleHitSounds.cpp
     src/DefaultHitSounds.cpp
     src/Osz.cpp

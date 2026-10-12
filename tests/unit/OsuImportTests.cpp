@@ -1,3 +1,5 @@
+#include "mania/ManiaJudge.h"
+#include "osu/OsuInfo.h"
 #include "osu/OsuManiaImporter.h"
 
 #include <doctest/doctest.h>
@@ -60,6 +62,8 @@ TEST_CASE("osu!mania import: lanes, holds, metadata, timing, and scroll velocity
     CHECK(chart.Info.Metadata.Charter == "Someone");
     CHECK(chart.Info.Metadata.DifficultyName == "4K Normal");
     CHECK(chart.Info.Metadata.PreviewStartUs == 5'000'000);
+    REQUIRE(chart.Info.Metadata.OverallDifficulty);
+    CHECK(*chart.Info.Metadata.OverallDifficulty == doctest::Approx(8.0));
 
     // The note at 2500 in lane 2 starts inside the hold, so it is dropped with a warning.
     REQUIRE(chart.Notes.size() == 5);
@@ -91,6 +95,36 @@ TEST_CASE("osu!mania import: lanes, holds, metadata, timing, and scroll velocity
     CHECK(chart.Info.ScrollVelocity[2].Multiplier == doctest::Approx(2.0));
 }
 
+TEST_CASE("osu! info: a song list's details without the notes, as the importer reads them")
+{
+    const std::string text =
+        WithLine(WithLine(OSU_4K, "Version:4K Normal\n", "Version:4K Normal\nTags:vocaloid miku\nSource:Some Game\n"),
+                 "[TimingPoints]\n", "[Events]\n0,0,\"bg.png\",0,0\n\n[TimingPoints]\n");
+    hyoshi::Result<hyoshi::osu::OsuInfo> info = hyoshi::osu::ReadOsuInfo(text);
+    REQUIRE(info);
+    hyoshi::Result<hyoshi::osu::OsuImportResult> imported = hyoshi::osu::ImportOsuMania(text);
+    REQUIRE(imported);
+    const hyoshi::rhythm::ChartMetadata& full = imported.Value().Chart.Info.Metadata;
+    CHECK(info.Value().Metadata.Title == full.Title);
+    CHECK(info.Value().Metadata.Artist == full.Artist);
+    CHECK(info.Value().Metadata.Charter == full.Charter);
+    CHECK(info.Value().Metadata.DifficultyName == full.DifficultyName);
+    CHECK(info.Value().Metadata.PreviewStartUs == full.PreviewStartUs);
+    CHECK(info.Value().Metadata.OverallDifficulty == full.OverallDifficulty);
+    CHECK(info.Value().AudioFile == "audio.mp3");
+    CHECK(info.Value().BackgroundFile == "bg.png");
+    CHECK(info.Value().Tags == "vocaloid miku");
+    CHECK(info.Value().Source == "Some Game");
+    CHECK(info.Value().Mode == 3);
+    CHECK(info.Value().KeyCount == 4);
+    CHECK(info.Value().HitObjectCount == 6);
+    // The last note at 3000.4 ms, after the hold's end at 2750.
+    CHECK(info.Value().EndUs == 3'000'400);
+    CHECK(info.Value().Bpm == doctest::Approx(120.0));
+
+    CHECK_FALSE(hyoshi::osu::ReadOsuInfo("osu file format v14\n[General]\nMode: 3\n[HitObjects]\n"));
+}
+
 TEST_CASE("osu!mania import: the result survives a write and read")
 {
     hyoshi::Result<hyoshi::osu::OsuImportResult> imported = hyoshi::osu::ImportOsuMania(OSU_4K);
@@ -100,6 +134,7 @@ TEST_CASE("osu!mania import: the result survives a write and read")
     hyoshi::Result<hyoshi::mania::ManiaChart> reread = hyoshi::mania::ParseManiaChart(json.Value());
     REQUIRE(reread);
     CHECK(reread.Value().Notes.size() == 5);
+    CHECK(reread.Value().Info.Metadata.OverallDifficulty == imported.Value().Chart.Info.Metadata.OverallDifficulty);
     CHECK(reread.Value().Notes[4].ScrollPosition == doctest::Approx(imported.Value().Chart.Notes[4].ScrollPosition));
 }
 
@@ -145,4 +180,22 @@ TEST_CASE("osu!mania import: notes keep their custom hit sounds")
     CHECK(chart.Notes[3].Sample == hyoshi::rhythm::ChartNote::NO_SAMPLE);
     CHECK(chart.Notes[4].Sample == 0);
     CHECK(chart.Notes[4].SampleVolume == 60);
+}
+
+TEST_CASE("osu!mania windows: 16 ms for a MAX, the others 3 ms tighter per OD")
+{
+    const hyoshi::rhythm::HitWindows eight = hyoshi::mania::GetOsuManiaWindows(8.0);
+    const hyoshi::rhythm::HitWindows defaults;
+    CHECK(eight.PerfectUs == defaults.PerfectUs);
+    CHECK(eight.GreatUs == defaults.GreatUs);
+    CHECK(eight.GoodUs == defaults.GoodUs);
+    CHECK(eight.BadUs == defaults.BadUs);
+
+    const hyoshi::rhythm::HitWindows five = hyoshi::mania::GetOsuManiaWindows(5.0);
+    CHECK(five.PerfectUs == 16'000);
+    CHECK(five.GreatUs == 49'000);
+    CHECK(five.GoodUs == 82'000);
+    CHECK(five.BadUs == 112'000);
+    // Out of range ODs are held to 0 to 10.
+    CHECK(hyoshi::mania::GetOsuManiaWindows(14.0).GreatUs == 34'000);
 }

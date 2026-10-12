@@ -40,8 +40,14 @@ function(hyoshi_configure_web_app target)
     target_link_options(${target} PRIVATE
         # Workers for the job system, started with the page so creating a thread never waits.
         "-sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency"
-        # The main loop yields to the browser once a frame (Application::Run), which needs JSPI.
-        -sJSPI
+        # The main loop yields to the browser once a frame (Application::Run). Asyncify does it in
+        # any browser (JSPI needs a recent Chromium); only the direct calls from main to the yield
+        # are instrumented, so it costs next to nothing, plus SDL's main, which calls the app's
+        # through a pointer. SDL's own waits don't yield (Platform).
+        -sASYNCIFY
+        -sASYNCIFY_IGNORE_INDIRECT
+        -sASYNCIFY_ADD=SDL_CallMainFunction
+        -sASYNCIFY_STACK_SIZE=65536
         -sALLOW_MEMORY_GROWTH=1
         -sSTACK_SIZE=2MB
         -sDEFAULT_PTHREAD_STACK_SIZE=1MB

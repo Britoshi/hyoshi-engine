@@ -2,6 +2,7 @@
 
 #if defined(__EMSCRIPTEN__)
 #include "DebugUi.wgsl.h"
+#include "DebugUiGles.h"
 #else
 #include "DebugUi.spv.h"
 #endif
@@ -77,6 +78,8 @@ Result<void> DebugUi::Initialize(rhi::IRenderDevice& renderDevice, platform::Pla
     rhi::PipelineDesc pipelineDesc;
 #if defined(__EMSCRIPTEN__)
     pipelineDesc.Wgsl = DEBUG_UI_WGSL;
+    pipelineDesc.GlesVertex = DEBUG_UI_GLES_VERTEX;
+    pipelineDesc.GlesFragment = DEBUG_UI_GLES_FRAGMENT;
 #else
     pipelineDesc.Spirv = DEBUG_UI_SPIRV;
 #endif

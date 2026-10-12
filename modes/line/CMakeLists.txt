@@ -3,6 +3,7 @@ add_library(hyoshi_line STATIC
     src/LineJudge.cpp
     src/LinePlayfield.cpp
     src/PhigrosImport.cpp
+    src/RpeImport.cpp
 )
 add_library(hyoshi::line ALIAS hyoshi_line)
 

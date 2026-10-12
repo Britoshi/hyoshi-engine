@@ -28,10 +28,11 @@ const SliderPart* FindPart(const CircleChart* chart, const rhythm::JudgmentEvent
 
 } // namespace
 
-void CircleScore::Reset(const CircleChart& circleChart)
+void CircleScore::Reset(const CircleChart& circleChart, const CircleHeadValues& values)
 {
     *this = CircleScore{};
     chart = &circleChart;
+    headValues = values;
 
     // A perfect run: every judgment at its best, in the order they come.
     struct Item
@@ -161,17 +162,17 @@ const char* CircleScore::GetRank() const
     return accuracy >= 7'000 ? "C" : "D";
 }
 
-int64_t CircleScore::GetBaseValue(Judgment judgment)
+int64_t CircleScore::GetBaseValue(Judgment judgment) const
 {
     switch (judgment)
     {
     case Judgment::Perfect:
     case Judgment::Great:
-        return 300;
+        return headValues.Great;
     case Judgment::Good:
-        return 100;
+        return headValues.Good;
     case Judgment::Bad:
-        return 50;
+        return headValues.Bad;
     case Judgment::Miss:
     case Judgment::Count:
         break;

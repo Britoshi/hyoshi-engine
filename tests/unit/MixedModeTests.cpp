@@ -1,5 +1,6 @@
 #include "line/LineChart.h"
 #include "line/LineJudge.h"
+#include "line/LinePlayfield.h"
 #include "line/PhigrosImport.h"
 #include "mania/ArcaeaJudge.h"
 #include "mania/ManiaChart.h"
@@ -231,6 +232,116 @@ TEST_CASE("Phigros autoplay: every judgment Perfect, the same live and replayed"
     }
 }
 
+TEST_CASE("Phigros field reshaped to the screen: lines spread over it, notes keep their size, autoplay follows")
+{
+    // A 4:3 screen: the field is as wide as ever and taller; a 21:9 one, wider.
+    const glm::vec2 squarer = hyoshi::line::GetScreenFieldSize({1600.0f, 1200.0f});
+    CHECK(squarer.x == doctest::Approx(hyoshi::line::FIELD_WIDTH));
+    CHECK(squarer.y == doctest::Approx(1440.0f));
+    const glm::vec2 wider = hyoshi::line::GetScreenFieldSize({2520.0f, 1080.0f});
+    CHECK(wider.x == doctest::Approx(2520.0f));
+    CHECK(wider.y == doctest::Approx(hyoshi::line::FIELD_HEIGHT));
+    // Fit to that screen, it fills it.
+    const hyoshi::line::LineLayout layout = hyoshi::line::LineLayout::Fit({1600.0f, 1200.0f}, squarer);
+    CHECK(layout.ToCanvas({0.0f, 0.0f}).y == doctest::Approx(0.0f));
+    CHECK(layout.ToCanvas(squarer).y == doctest::Approx(1200.0f));
+
+    // A line at a fraction of the field is at that fraction of the reshaped one.
+    Mixed chart = ParseMixed(MIXED_CHART);
+    chart.Lines.FieldSize = squarer;
+    const hyoshi::line::LineState state = hyoshi::line::GetLineState(chart.Lines.Lines[0], 0, chart.Lines.FieldSize);
+    const hyoshi::line::LineState usual = hyoshi::line::GetLineState(chart.Lines.Lines[0], 0);
+    CHECK(state.Position.x == doctest::Approx(usual.Position.x));
+    CHECK(state.Position.y == doctest::Approx(usual.Position.y * squarer.y / hyoshi::line::FIELD_HEIGHT));
+
+    // Autoplay on the reshaped field is still all Perfect.
+    const std::vector<GameplayAction> actions = hyoshi::line::MakeAutoplayActions(chart.Lines);
+    hyoshi::line::LineJudge judge;
+    judge.Reset(chart.Lines);
+    std::vector<JudgmentEvent> events;
+    for (const GameplayAction& action : actions)
+    {
+        judge.ProcessAction(action, events);
+    }
+    judge.Advance(10'000'000, events);
+    REQUIRE(events.size() == chart.Lines.GetJudgmentCount());
+    for (const JudgmentEvent& event : events)
+    {
+        CHECK(event.Result == Judgment::Perfect);
+    }
+}
+
+TEST_CASE("Phigros judge: any pointer down holds, however long it's been down and whatever it pressed")
+{
+    using hyoshi::line::LineAction;
+    using hyoshi::line::NoteKind;
+    // A level line across the middle that waits at the field's left edge, then slides under the
+    // middle by 1 s and stays. A drag at 1 s, a hold from 1.5 to 2 s, a tap at 2.5 s, and a drag at
+    // 3 s, all at its middle.
+    hyoshi::line::JudgeLine line;
+    line.X = {{0, 0.0f}, {900'000, 0.0f}, {1'000'000, 0.5f}};
+    line.Y = {{0, 0.5f}};
+    line.Speed = {{0, 1.0f}};
+    hyoshi::rhythm::Chart info;
+    std::vector<hyoshi::line::LineNote> notes;
+    const auto add = [&](SongTimeUs time, SongTimeUs end, NoteKind kind)
+    {
+        hyoshi::line::LineNote note;
+        note.Time = time;
+        note.EndTime = end;
+        note.Kind = kind;
+        notes.push_back(note);
+        info.Notes.push_back({time, end});
+    };
+    add(1'000'000, 1'000'000, NoteKind::Drag);
+    add(1'500'000, 2'000'000, NoteKind::Hold);
+    add(2'500'000, 2'500'000, NoteKind::Tap);
+    add(3'000'000, 3'000'000, NoteKind::Drag);
+    hyoshi::Result<hyoshi::line::LineChart> chart = hyoshi::line::BuildLineChart(std::move(info), {line}, notes);
+    REQUIRE(chart);
+
+    hyoshi::line::LineJudge judge;
+    judge.Reset(chart.Value());
+    std::vector<JudgmentEvent> events;
+    const glm::vec2 middle{hyoshi::line::FIELD_WIDTH * 0.5f, hyoshi::line::FIELD_HEIGHT * 0.5f};
+    // Down in the middle long before the drag, and still: the drag's window opens with the line
+    // still far off, and the line comes under the finger just before the drag arrives. Caught.
+    judge.ProcessAction(LineAct(LineAction::Press, 0, middle, 500'000), events);
+    judge.Advance(1'200'000, events);
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].NoteIndex == 0);
+    CHECK(events[0].Result == Judgment::Perfect);
+    CHECK(events[0].Time == 1'000'000);
+
+    // The same finger, still down, takes the hold as it arrives, as if struck on time (untimed).
+    judge.Advance(1'600'000, events);
+    REQUIRE(events.size() == 2);
+    CHECK(events[1].NoteIndex == 1);
+    CHECK(events[1].Result == Judgment::Perfect);
+    CHECK_FALSE(events[1].IsTimed);
+    CHECK(judge.GetNoteState(1) == hyoshi::line::NoteState::Held);
+
+    // A second finger comes down without striking (its press went elsewhere), and the first lets
+    // go early: the second holds the hold to its end.
+    judge.ProcessAction(LineAct(LineAction::Touch, 1, middle, 1'700'000), events);
+    judge.ProcessAction(LineAct(LineAction::Release, 0, middle, 1'800'000), events);
+    judge.Advance(2'100'000, events);
+    REQUIRE(events.size() == 3);
+    CHECK(events[2].IsTail);
+    CHECK(events[2].Result == Judgment::Perfect);
+
+    // A tap needs a press: a finger down, or touching, misses it. The touching finger catches the
+    // drag after it.
+    judge.ProcessAction(LineAct(LineAction::Touch, 2, middle, 2'500'000), events);
+    judge.Advance(3'500'000, events);
+    REQUIRE(events.size() == 5);
+    CHECK(events[3].NoteIndex == 2);
+    CHECK(events[3].Result == Judgment::Miss);
+    CHECK(events[4].NoteIndex == 3);
+    CHECK(events[4].Result == Judgment::Perfect);
+    CHECK(judge.IsFinished());
+}
+
 TEST_CASE("Arcaea judge: Pure and Far windows, and holds held for their combos")
 {
     hyoshi::rhythm::Chart common;
@@ -265,7 +376,11 @@ TEST_CASE("Arcaea judge: Pure and Far windows, and holds held for their combos")
     judge.ProcessAction(hyoshi::mania::MakeAction(ManiaAction::Press, 1, 2'200'000), events);
     judge.ProcessAction(hyoshi::mania::MakeAction(ManiaAction::Release, 1, 2'400'000), events);
     judge.ProcessAction(hyoshi::mania::MakeAction(ManiaAction::Press, 1, 2'600'000), events);
+    // Past its last combo (2.75 s) but before its end (3 s), the hold is still there, held.
+    judge.Advance(2'900'000, events);
+    CHECK(judge.GetNoteState(1) == hyoshi::mania::NoteState::Held);
     judge.Advance(4'000'000, events);
+    CHECK(judge.GetNoteState(1) == hyoshi::mania::NoteState::Hit);
     std::vector<Judgment> holdResults;
     for (const JudgmentEvent& event : events)
     {
@@ -277,6 +392,22 @@ TEST_CASE("Arcaea judge: Pure and Far windows, and holds held for their combos")
     const std::vector<Judgment> expected{Judgment::Miss, Judgment::Perfect, Judgment::Miss, Judgment::Perfect};
     CHECK(holdResults == expected);
     CHECK(judge.IsFinished());
+
+    // Lanes touched rather than pressed (fingers whose presses went to another mode) from before
+    // the notes: the tap isn't struck, and the hold has every combo.
+    hyoshi::mania::ArcaeaJudge touched;
+    touched.Reset(chart.Value());
+    std::vector<JudgmentEvent> touchEvents;
+    touched.ProcessAction(hyoshi::mania::MakeAction(ManiaAction::Touch, 0, 950'000), touchEvents);
+    touched.ProcessAction(hyoshi::mania::MakeAction(ManiaAction::Touch, 1, 1'500'000), touchEvents);
+    touched.Advance(4'000'000, touchEvents);
+    REQUIRE(touchEvents.size() == 5);
+    CHECK(touchEvents[0].NoteIndex == 0);
+    CHECK(touchEvents[0].Result == Judgment::Miss);
+    for (size_t i = 1; i < touchEvents.size(); ++i)
+    {
+        CHECK(touchEvents[i].Result == Judgment::Perfect);
+    }
 }
 
 TEST_CASE("Phigros import: format 3 and the packed moves of format 1, times in 1/32 beats")
@@ -336,6 +467,10 @@ TEST_CASE("Chart format 2 writes what it reads")
     REQUIRE(chart);
     // A line moving over time, so its keys are written as a list.
     judgeLines[0].Y = {{0, 0.25f}, {2'000'000, 0.75f}};
+    judgeLines[0].Length = {{0, 0.5f}};
+    judgeLines[0].Blue = {{0, 0.0f}, {1'000'000, 1.0f}};
+    judgeLines[0].Picture = "pictures/fish.png";
+    judgeLines[0].Anchor = {0.25f, 1.0f};
     lineNotes[2].Speed = 1.5f;
     hyoshi::Result<std::string> written = hyoshi::rhythm::WriteChart(chart.Value(), formats);
     REQUIRE(written);
@@ -355,4 +490,193 @@ TEST_CASE("Chart format 2 writes what it reads")
     REQUIRE(reread.Lines.Lines[0].Y.size() == 2);
     CHECK(reread.Lines.Lines[0].Y[1].Time == 2'000'000);
     CHECK(reread.Lines.Lines[0].X.size() == 1);
+    CHECK(hyoshi::line::GetKeyValue(reread.Lines.Lines[0].Length, 0, 1.0f) == doctest::Approx(0.5f));
+    CHECK(reread.Lines.Lines[0].Blue.size() == 2);
+    CHECK(reread.Lines.Lines[0].Red.empty());
+    CHECK(reread.Lines.Lines[0].Picture == "pictures/fish.png");
+    CHECK(reread.Lines.Lines[0].Anchor.x == doctest::Approx(0.25f));
+    CHECK(reread.Lines.Lines[0].Anchor.y == doctest::Approx(1.0f));
+}
+
+namespace
+{
+
+// A small Re:PhiEdit chart: two tempos, three layers (one null), eased events, a picture line
+// (twice as wide, anchored at its top left), a null line, a child line drawn first, scaled, and
+// colored, and a fake note.
+const char* const RPE_CHART = R"({
+  "BPMList": [{"bpm": 120, "startTime": [0, 0, 1]}, {"bpm": 60, "startTime": [4, 0, 1]}],
+  "META": {"RPEVersion": 160, "name": "Song", "composer": "Someone", "charter": "Me", "level": "IN Lv.12",
+           "song": "song.ogg", "offset": -50},
+  "judgeLineList": [
+    {"Texture": "line.png", "father": -1, "bpmfactor": 1.0,
+     "eventLayers": [
+       {"moveXEvents": [{"startTime": [0, 0, 1], "endTime": [2, 0, 1], "start": 0, "end": 675, "easingType": 1}],
+        "moveYEvents": [{"startTime": [0, 0, 1], "endTime": [1, 0, 1], "start": -450, "end": -450, "easingType": 1}],
+        "rotateEvents": [{"startTime": [0, 0, 1], "endTime": [2, 0, 1], "start": 0, "end": 90, "easingType": 5}],
+        "alphaEvents": [{"startTime": [0, 0, 1], "endTime": [1, 0, 1], "start": 255, "end": 255, "easingType": 1}],
+        "speedEvents": [{"startTime": [0, 0, 1], "endTime": [1, 0, 1], "start": 9, "end": 9}]},
+       null,
+       {"moveXEvents": [{"startTime": [0, 0, 1], "endTime": [1, 0, 1], "start": 135, "end": 135, "easingType": 1}]}],
+     "notes": [
+       {"type": 1, "startTime": [1, 0, 1], "endTime": [1, 0, 1], "positionX": 151.875, "above": 1, "isFake": 0,
+        "speed": 1},
+       {"type": 2, "startTime": [2, 0, 1], "endTime": [3, 1, 2], "positionX": 0, "above": 2, "isFake": 0, "speed": 1},
+       {"type": 3, "startTime": [5, 0, 1], "endTime": [5, 0, 1], "positionX": 0, "above": 1, "isFake": 0, "speed": 1},
+       {"type": 4, "startTime": [5, 0, 1], "endTime": [5, 0, 1], "positionX": 0, "above": 1, "isFake": 1, "speed": 1}]},
+    {"Texture": "fish.png", "father": -1, "bpmfactor": 1.0, "anchor": [0.0, 1.0],
+     "eventLayers": [{"alphaEvents": [{"startTime": [0, 0, 1], "endTime": [1, 0, 1], "start": 255, "end": 255}]}],
+     "extended": {"scaleXEvents": [{"startTime": [0, 0, 1], "endTime": [1, 0, 1], "start": 2, "end": 2}]},
+     "notes": null},
+    null,
+    {"Texture": "line.png", "father": 0, "bpmfactor": 1.0, "zOrder": -1,
+     "eventLayers": [{"moveXEvents": [{"startTime": [0, 0, 1], "endTime": [1, 0, 1], "start": 100, "end": 100}]}],
+     "extended": {
+       "scaleXEvents": [{"startTime": [0, 0, 1], "endTime": [1, 0, 1], "start": 0.5, "end": 0.5}],
+       "scaleYEvents": [{"startTime": [0, 0, 1], "endTime": [1, 0, 1], "start": 200, "end": 200}],
+       "colorEvents": [{"startTime": [0, 0, 1], "endTime": [4, 0, 1], "start": [255, 0, 0], "end": [0, 0, 255]}]}}]
+})";
+
+hyoshi::line::LineChart MakeOneLineChart(std::vector<hyoshi::line::LineNote> notes)
+{
+    hyoshi::rhythm::Chart info;
+    for (const hyoshi::line::LineNote& note : notes)
+    {
+        info.Notes.push_back({note.Time, note.EndTime});
+    }
+    hyoshi::line::JudgeLine line;
+    line.X = {{0, 0.5f}};
+    line.Y = {{0, 0.5f}};
+    hyoshi::Result<hyoshi::line::LineChart> chart = hyoshi::line::BuildLineChart(info, {line}, std::move(notes));
+    REQUIRE(chart);
+    return std::move(chart).Value();
+}
+
+hyoshi::line::LineNote MakeLineNote(SongTimeUs time, hyoshi::line::NoteKind kind)
+{
+    hyoshi::line::LineNote note;
+    note.Time = time;
+    note.EndTime = time;
+    note.Kind = kind;
+    return note;
+}
+
+} // namespace
+
+TEST_CASE("Re:PhiEdit import: beats along the tempo, layers added, easing baked, lines scaled, colored, and "
+          "ordered, pictures kept, and null lines hidden")
+{
+    hyoshi::Result<hyoshi::line::PhigrosImportResult> imported = hyoshi::line::ImportRpe(RPE_CHART);
+    REQUIRE(imported);
+    const hyoshi::line::LineChart& chart = imported.Value().Chart;
+    CHECK(chart.Info.Metadata.Title == "Song");
+    CHECK(chart.Info.AudioFile == "song.ogg");
+    CHECK(chart.Info.AudioOffsetUs == -50'000);
+    REQUIRE(chart.Info.Timing.size() == 2);
+    CHECK(chart.Info.Timing[1].Time == 2'000'000);
+
+    // The fake note is left out; RPE's types are tap, hold, flick, drag.
+    REQUIRE(chart.Notes.size() == 3);
+    CHECK(chart.Notes[0].Kind == hyoshi::line::NoteKind::Tap);
+    CHECK(chart.Notes[0].Time == 500'000);
+    CHECK(chart.Notes[0].X == doctest::Approx(2.0f));
+    CHECK(chart.Notes[1].Kind == hyoshi::line::NoteKind::Hold);
+    CHECK(chart.Notes[1].Time == 1'000'000);
+    CHECK(chart.Notes[1].EndTime == 1'750'000);
+    CHECK_FALSE(chart.Notes[1].IsAbove);
+    // Beat 5 is a beat at 60 BPM after beat 4, at 2 s.
+    CHECK(chart.Notes[2].Kind == hyoshi::line::NoteKind::Flick);
+    CHECK(chart.Notes[2].Time == 3'000'000);
+    // The child line, lowest in zOrder, comes first, so the notes' line is second.
+    REQUIRE(chart.Lines.size() == 4);
+    CHECK(chart.Notes[0].Line == 1);
+    CHECK(chart.Notes[2].Line == 1);
+
+    const hyoshi::line::JudgeLine& line = chart.Lines[1];
+    // Half way: 337.5 and the other layer's 135, from the canvas's middle.
+    CHECK(hyoshi::line::GetKeyValue(line.X, 500'000, 0.0f) == doctest::Approx(0.5f + (472.5f / 1350.0f)));
+    CHECK(hyoshi::line::GetKeyValue(line.Y, 500'000, 0.0f) == doctest::Approx(0.0f));
+    // Ease in quad, half way: a quarter of 90 degrees, turned to counterclockwise.
+    CHECK(hyoshi::line::GetKeyValue(line.Rotation, 500'000, 0.0f) == doctest::Approx(-22.5f));
+    CHECK(line.Speed.front().Value == doctest::Approx(2.0f));
+    // Unscaled, Phira's length (3 field widths) and our thickness, in the usual color.
+    CHECK(hyoshi::line::GetKeyValue(line.Length, 0, 0.0f) == doctest::Approx(0.75f));
+    CHECK(hyoshi::line::GetKeyValue(line.Thickness, 0, 0.0f) == doctest::Approx(1.0f));
+    CHECK(line.Red.empty());
+    // The picture line draws its picture: a pixel is a canvas unit (1350 by 900 on the field), times
+    // its scale, set by its anchor. The null line hides.
+    const hyoshi::line::JudgeLine& picture = chart.Lines[2];
+    CHECK(picture.Picture == "fish.png");
+    CHECK(picture.Anchor.x == doctest::Approx(0.0f));
+    CHECK(picture.Anchor.y == doctest::Approx(1.0f));
+    CHECK(hyoshi::line::GetKeyValue(picture.Opacity, 0, 0.0f) == doctest::Approx(1.0f));
+    CHECK(hyoshi::line::GetKeyValue(picture.Length, 0, 0.0f) ==
+          doctest::Approx(2.0f * hyoshi::line::FIELD_WIDTH / 1350.0f));
+    CHECK(hyoshi::line::GetKeyValue(picture.Thickness, 0, 0.0f) ==
+          doctest::Approx(hyoshi::line::FIELD_HEIGHT / 900.0f));
+    CHECK(hyoshi::line::GetKeyValue(chart.Lines[3].Opacity, 0, 1.0f) == doctest::Approx(0.0f));
+    const std::vector<hyoshi::line::PictureUse> uses = hyoshi::line::GetPictureUses(chart);
+    REQUIRE(uses.size() == 1);
+    CHECK(uses[0].Name == "fish.png");
+    CHECK(uses[0].MaxUnitsPerPixel.x == doctest::Approx(2.0f * hyoshi::line::FIELD_WIDTH / 1350.0f));
+    // The child at 1 s: its parent at (810, -450) turned 90 degrees clockwise, so its own (100, 0)
+    // points down.
+    const hyoshi::line::JudgeLine& child = chart.Lines[0];
+    CHECK(hyoshi::line::GetKeyValue(child.X, 1'000'000, 0.0f) == doctest::Approx(0.5f + (810.0f / 1350.0f)));
+    CHECK(hyoshi::line::GetKeyValue(child.Y, 1'000'000, 0.0f) == doctest::Approx(0.5f - (550.0f / 900.0f)));
+    // Half as long as Phira's line, and 200 times Phira's scaled thickness (0.0076 of half the
+    // field's width); half way from red to blue at 1 s.
+    const hyoshi::line::LineState state = hyoshi::line::GetLineState(child, 1'000'000);
+    CHECK(state.Length == doctest::Approx(0.375f));
+    CHECK(state.Thickness * hyoshi::line::LINE_THICKNESS ==
+          doctest::Approx(200.0f * 0.0076f * hyoshi::line::FIELD_WIDTH / 2.0f));
+    REQUIRE(state.Color);
+    CHECK(state.Color->r == doctest::Approx(0.5f));
+    CHECK(state.Color->g == doctest::Approx(0.0f));
+    CHECK(state.Color->b == doctest::Approx(0.5f));
+    CHECK(imported.Value().Warnings.size() == 2);
+
+    // The Phigros importer hands it over.
+    hyoshi::Result<hyoshi::line::PhigrosImportResult> handed = hyoshi::line::ImportPhigros(RPE_CHART);
+    REQUIRE(handed);
+    CHECK(handed.Value().Chart.Notes.size() == 3);
+}
+
+TEST_CASE("Phigros judge: a press for a flick or drag due sooner leaves a later tap, and a swipe takes one flick")
+{
+    using hyoshi::line::LineAction;
+    using hyoshi::line::NoteKind;
+    {
+        // A flick, then a tap 100 ms later in the same place.
+        const hyoshi::line::LineChart chart =
+            MakeOneLineChart({MakeLineNote(1'000'000, NoteKind::Flick), MakeLineNote(1'100'000, NoteKind::Tap)});
+        hyoshi::line::LineJudge judge;
+        judge.Reset(chart);
+        std::vector<JudgmentEvent> events;
+        judge.ProcessAction(LineAct(LineAction::Press, 0, OnLine(0.0f), 970'000), events);
+        CHECK(events.empty());
+        judge.ProcessAction(LineAct(LineAction::Move, 0, OnLine(0.0f) + glm::vec2{0.0f, -80.0f}, 1'000'000), events);
+        judge.ProcessAction(LineAct(LineAction::Release, 0, OnLine(0.0f), 1'030'000), events);
+        judge.ProcessAction(LineAct(LineAction::Press, 0, OnLine(0.0f), 1'100'000), events);
+        REQUIRE(events.size() == 2);
+        CHECK(events[0].NoteIndex == 0);
+        CHECK(events[1].NoteIndex == 1);
+        CHECK(events[1].Result == Judgment::Perfect);
+    }
+    {
+        // Two flicks 100 ms apart: one swipe catches the first only.
+        const hyoshi::line::LineChart chart =
+            MakeOneLineChart({MakeLineNote(1'000'000, NoteKind::Flick), MakeLineNote(1'100'000, NoteKind::Flick)});
+        hyoshi::line::LineJudge judge;
+        judge.Reset(chart);
+        std::vector<JudgmentEvent> events;
+        judge.ProcessAction(LineAct(LineAction::Press, 0, OnLine(0.0f), 970'000), events);
+        judge.ProcessAction(LineAct(LineAction::Move, 0, OnLine(0.0f) + glm::vec2{0.0f, -80.0f}, 1'000'000), events);
+        judge.ProcessAction(LineAct(LineAction::Release, 0, OnLine(0.0f), 1'030'000), events);
+        judge.Advance(1'300'000, events);
+        REQUIRE(events.size() == 2);
+        CHECK(events[0].Result == Judgment::Perfect);
+        CHECK(events[1].NoteIndex == 1);
+        CHECK(events[1].Result == Judgment::Miss);
+    }
 }

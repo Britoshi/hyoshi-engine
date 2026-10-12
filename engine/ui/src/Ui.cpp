@@ -411,6 +411,102 @@ bool Ui::WasClicked(const Rect& rect, std::string_view id)
     return Interact(HashBytes(14695981039346656037ull, id.data(), id.size()), rect, isHovered, isHeld);
 }
 
+void Ui::FocusTextField(std::string_view id)
+{
+    focusedField = HashBytes(14695981039346656037ull, id.data(), id.size());
+}
+
+bool Ui::TextField(const Rect& rect, std::string& value, std::string_view placeholder, std::string_view id)
+{
+    const uint64_t fieldId = HashBytes(14695981039346656037ull, id.data(), id.size());
+    // The field, then its clear button over its right end while there's text.
+    const bool wasFocused = focusedField == fieldId;
+    DrawRoundedRect(rect, std::min(rect.Height() * 0.3f, 18.0f),
+                    wasFocused ? colors::PANEL_RAISED : (IsHovered(rect) ? colors::BUTTON : colors::PANEL));
+    Rect typing = rect;
+    bool isChanged = false;
+    if (!value.empty())
+    {
+        if (Button(typing.TakeRight(rect.Height()), "x", ButtonKind::Flat, rect.Height() * 0.5f))
+        {
+            value.clear();
+            isChanged = true;
+        }
+    }
+
+    bool isHovered = false;
+    bool isHeld = false;
+    if (Interact(fieldId, typing, isHovered, isHeld))
+    {
+        focusedField = fieldId;
+    }
+    else if (focusedField == fieldId && isInputEnabled && isPointerPressed && !rect.Contains(pointer))
+    {
+        focusedField = 0;
+    }
+    const auto take = [this](uint32_t code)
+    {
+        const auto found = std::find(pressedKeys.begin(), pressedKeys.end(), code);
+        if (found == pressedKeys.end())
+        {
+            return false;
+        }
+        pressedKeys.erase(found);
+        return true;
+    };
+    if (focusedField == fieldId && isInputEnabled)
+    {
+        // Control characters aren't text (some platforms send a tab or a newline).
+        for (const char c : typedText)
+        {
+            if (static_cast<unsigned char>(c) >= 0x20 && c != 0x7f)
+            {
+                value += c;
+                isChanged = true;
+            }
+        }
+        typedText.clear();
+        while (take(hyoshi::input::keys::BACKSPACE) && !value.empty())
+        {
+            // The last character: its lead byte and any continuation bytes (10xxxxxx).
+            size_t end = value.size() - 1;
+            while (end > 0 && (static_cast<unsigned char>(value[end]) & 0xC0) == 0x80)
+            {
+                --end;
+            }
+            value.erase(end);
+            isChanged = true;
+        }
+        if (take(hyoshi::input::keys::ESCAPE) || take(hyoshi::input::keys::RETURN) ||
+            take(hyoshi::input::keys::KEYPAD_ENTER))
+        {
+            focusedField = 0;
+        }
+        // Letters typed into the field aren't shortcuts.
+        std::erase_if(pressedKeys, [](uint32_t code)
+                      { return code >= hyoshi::input::keys::A && code <= hyoshi::input::keys::Letter('Z'); });
+    }
+    const bool isFocused = focusedField == fieldId;
+    if (isFocused)
+    {
+        DrawRoundedRect(Rect::FromSize({rect.Min.x, rect.Max.y - 4.0f}, {rect.Width(), 4.0f}), 2.0f, colors::ACCENT, 1);
+    }
+    TextOptions options;
+    options.Size = rect.Height() * 0.5f;
+    options.MaxWidth = rect.Width() - rect.Height() - 32.0f;
+    options.Tint = value.empty() ? colors::TEXT_DIM : colors::TEXT;
+    const glm::vec2 anchor{rect.Min.x + 20.0f, rect.Center().y};
+    const float width = DrawText(value.empty() ? placeholder : std::string_view(value), anchor, options, TEXT_LAYER);
+    // A blinking caret after the text.
+    if (isFocused && std::fmod(time, 1.0f) < 0.6f)
+    {
+        const float caretX = anchor.x + (value.empty() ? 0.0f : width) + 3.0f;
+        DrawRect(Rect::FromSize({caretX, rect.Center().y - (options.Size * 0.55f)}, {3.0f, options.Size * 1.1f}),
+                 colors::TEXT, TEXT_LAYER);
+    }
+    return isChanged;
+}
+
 bool Ui::Button(const Rect& rect, std::string_view label, ButtonKind kind, float textSize)
 {
     bool isHovered = false;

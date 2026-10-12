@@ -73,6 +73,7 @@ Result<ManiaChart> BuildManiaChart(rhythm::Chart chart, uint32_t laneCount, std:
         note.EndScrollPosition = result.Scroll.GetPosition(source.EndTime);
         result.Notes.push_back(note);
     }
+    rhythm::MarkSimultaneous(result.Notes);
 
     chart.Notes.clear();
     result.Info = std::move(chart);

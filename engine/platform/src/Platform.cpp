@@ -76,6 +76,8 @@ struct LifecycleState
 {
     LifecycleCallback Callback;
     std::atomic<bool> IsSuspended = false;
+    // Set on entering the background, cleared by ConsumeSuspension.
+    std::atomic<bool> WasSuspended = false;
     std::atomic<bool> IsQuitRequested = false;
 };
 
@@ -85,6 +87,35 @@ namespace
 // Set when SaveFile or MakeDirectory changes a file, from any thread. The web build copies the
 // changes to the browser's storage once a frame.
 std::atomic<bool> isStorageChanged = false;
+
+#if defined(SDL_PLATFORM_ANDROID)
+// Where HyoshiActivity copies files opened with the app, in the cache folder.
+constexpr const char* ANDROID_OPENED_FOLDER = "opened";
+
+// Calls a static method of the game's activity (HyoshiActivity) that takes and returns nothing.
+void CallActivityStatic(const char* name)
+{
+    auto* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+    auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (env == nullptr || activity == nullptr)
+    {
+        return;
+    }
+    jclass type = env->GetObjectClass(activity);
+    jmethodID method = env->GetStaticMethodID(type, name, "()V");
+    if (method != nullptr)
+    {
+        env->CallStaticVoidMethod(type, method);
+    }
+    else
+    {
+        // An activity without it: not a failure.
+        env->ExceptionClear();
+    }
+    env->DeleteLocalRef(type);
+    env->DeleteLocalRef(activity);
+}
+#endif
 
 bool ToLifecycleEvent(Uint32 type, LifecycleEvent& outEvent)
 {
@@ -128,6 +159,7 @@ bool SDLCALL OnEventWatch(void* userData, SDL_Event* event)
     {
     case LifecycleEvent::DidEnterBackground:
         state->IsSuspended = true;
+        state->WasSuspended = true;
         break;
     case LifecycleEvent::WillEnterForeground:
         state->IsSuspended = false;
@@ -232,6 +264,9 @@ Result<void> Platform::Initialize(const PlatformConfig& config)
 
     // Android's back button arrives as a key (Escape, below) instead of closing the activity.
     SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
+    // While the app is in the background, SDL's event pump returns instead of blocking until it's
+    // back, so the main loop sees the suspension: it pauses the song and releases the surface.
+    SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "0");
     // Mac trackpad fingers arrive as touches on an indirect device, with where they touch the pad
     // (Trackpad events, below). Without this SDL drops them. The pointer moves as before.
     SDL_SetHint(SDL_HINT_TRACKPAD_IS_TOUCH_ONLY, "1");
@@ -239,6 +274,9 @@ Result<void> Platform::Initialize(const PlatformConfig& config)
     // clock as they arrive. Window messages carry GetMessageTime, which moves in 15 to 16 ms steps
     // (DESIGN.md section 12.3). Text input still comes from the messages.
     SDL_SetHint(SDL_HINT_WINDOWS_RAW_KEYBOARD, "1");
+    // On the web only the main loop yields to the browser (Asyncify, cmake/Platforms.cmake): SDL's
+    // delays mustn't try to from deep inside SDL.
+    SDL_SetHint(SDL_HINT_EMSCRIPTEN_ASYNCIFY, "0");
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
         return Error{std::string("SDL_Init failed: ") + SDL_GetError()};
@@ -302,6 +340,10 @@ Result<void> Platform::Initialize(const PlatformConfig& config)
     HYOSHI_LOG_INFO("SDL {}.{}.{}, video driver '{}', window {}x{} ({}x{} pixels)", SDL_VERSIONNUM_MAJOR(version),
                     SDL_VERSIONNUM_MINOR(version), SDL_VERSIONNUM_MICRO(version), SDL_GetCurrentVideoDriver(),
                     config.WindowWidth, config.WindowHeight, pixelWidth, pixelHeight);
+#if defined(SDL_PLATFORM_ANDROID)
+    // Files opened with the app before SDL took events arrive now, as drops.
+    CallActivityStatic("onNativeReady");
+#endif
 
     return {};
 }
@@ -388,6 +430,13 @@ void Platform::PumpEvents()
             isWindowResized = isWindowResized || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED;
             HYOSHI_LOG_DEBUG("Window {} {}x{}", event.type == SDL_EVENT_WINDOW_RESIZED ? "resized" : "pixel size",
                              event.window.data1, event.window.data2);
+            break;
+
+        case SDL_EVENT_TEXT_INPUT:
+            if (event.text.text != nullptr)
+            {
+                typedText += event.text.text;
+            }
             break;
 
         case SDL_EVENT_KEY_DOWN:
@@ -527,6 +576,12 @@ void Platform::PumpEvents()
 
 void Platform::WaitForEvents(int32_t timeoutMs)
 {
+#if defined(__EMSCRIPTEN__)
+    // Events arrive only while the browser has control, which the main loop gives it every frame
+    // (Application::Run): waiting here would never see one.
+    (void)timeoutMs;
+    return;
+#endif
     if (timeoutMs < 0)
     {
         SDL_WaitEvent(nullptr);
@@ -544,9 +599,33 @@ bool Platform::ConsumeWindowResized()
     return wasResized;
 }
 
+void Platform::SetTextInput(bool isOn)
+{
+    if (window == nullptr || isOn == isTextInputOn)
+    {
+        return;
+    }
+    isTextInputOn = isOn;
+    if (!(isOn ? SDL_StartTextInput(window) : SDL_StopTextInput(window)))
+    {
+        HYOSHI_LOG_WARN("Text input: {}", SDL_GetError());
+    }
+}
+
+std::string Platform::TakeTypedText()
+{
+    return std::exchange(typedText, {});
+}
+
 std::vector<std::string> Platform::TakeDroppedFiles()
 {
     return std::exchange(droppedFiles, {});
+}
+
+void Platform::AddDroppedFile(std::string path)
+{
+    HYOSHI_LOG_INFO("Opened with '{}'", path);
+    droppedFiles.push_back(std::move(path));
 }
 
 void Platform::ForgetDroppedFile([[maybe_unused]] const std::string& path)
@@ -556,6 +635,15 @@ void Platform::ForgetDroppedFile([[maybe_unused]] const std::string& path)
     if (path.starts_with("/tmp/filedrop/"))
     {
         SDL_RemovePath(path.c_str());
+    }
+#elif defined(SDL_PLATFORM_ANDROID)
+    // HyoshiActivity copies a file opened with the app into a folder of its own under the cache's
+    // opened/.
+    const char* cache = SDL_GetAndroidCachePath();
+    if (cache != nullptr && path.starts_with(std::string(cache) + "/" + ANDROID_OPENED_FOLDER + "/"))
+    {
+        SDL_RemovePath(path.c_str());
+        SDL_RemovePath(path.substr(0, path.find_last_of('/')).c_str());
     }
 #endif
 }
@@ -583,6 +671,11 @@ void Platform::RequestQuit()
 bool Platform::IsSuspended() const
 {
     return lifecycle->IsSuspended;
+}
+
+bool Platform::ConsumeSuspension()
+{
+    return lifecycle->WasSuspended.exchange(false);
 }
 
 HostTimeNs Platform::GetHostTimeNs() const
@@ -826,24 +919,22 @@ void Platform::SetOrientation(Orientation orientation)
     const jint requested = orientation == Orientation::Landscape  ? USER_LANDSCAPE
                            : orientation == Orientation::Portrait ? USER_PORTRAIT
                                                                   : FULL_USER;
+    // Only a change: asking again for what the activity has (the manifest's, say) makes the system
+    // apply the rotation lock again, turning the screen about.
     auto* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
     auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
     if (env != nullptr && activity != nullptr)
     {
         jclass type = env->GetObjectClass(activity);
-        jmethodID method = env->GetMethodID(type, "setRequestedOrientation", "(I)V");
-        if (method != nullptr)
+        jmethodID get = env->GetMethodID(type, "getRequestedOrientation", "()I");
+        jmethodID set = env->GetMethodID(type, "setRequestedOrientation", "(I)V");
+        if (get != nullptr && set != nullptr && env->CallIntMethod(activity, get) != requested)
         {
-            env->CallVoidMethod(activity, method, requested);
+            env->CallVoidMethod(activity, set, requested);
         }
         env->DeleteLocalRef(type);
         env->DeleteLocalRef(activity);
     }
-    // SDL reapplies its orientation hint when it recreates the window: keep it in step.
-    SDL_SetHint(SDL_HINT_ORIENTATIONS, orientation == Orientation::Landscape ? "LandscapeLeft LandscapeRight"
-                                       : orientation == Orientation::Portrait
-                                           ? "Portrait PortraitUpsideDown"
-                                           : "LandscapeLeft LandscapeRight Portrait PortraitUpsideDown");
 #else
     if (window == nullptr || orientation == Orientation::Auto)
     {

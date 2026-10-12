@@ -122,9 +122,18 @@ public:
     // True once after the window's size in pixels changes.
     bool ConsumeWindowResized();
 
+    // Text input, on while a text field has focus: typed text (UTF-8, as the keyboard layout and the
+    // input method make it) arrives with TakeTypedText, and phones show their on-screen keyboard.
+    void SetTextInput(bool isOn);
+    // What was typed since the last call.
+    std::string TakeTypedText();
+
     // Files dropped on the window, or chosen with BrowseForFiles, since the last call. On the web,
     // the browser's files are copied into memory first (SDL puts them under /tmp/filedrop/).
     std::vector<std::string> TakeDroppedFiles();
+
+    // Queues a file as if dropped on the window: one the app was opened with.
+    void AddDroppedFile(std::string path);
 
     // Done with a file from TakeDroppedFiles: deletes the platform's copy of it, if it made one (the
     // web's, in memory). The player's own files, dropped on a desktop window, are left alone.
@@ -143,6 +152,10 @@ public:
 
     // True between entering the background and returning to the foreground.
     bool IsSuspended() const;
+
+    // True once after entering the background, even if the app is back already: both can arrive
+    // within one PumpEvents.
+    bool ConsumeSuspension();
 
     HostTimeNs GetHostTimeNs() const;
 
@@ -216,8 +229,11 @@ public:
     // The part of the window clear of notches, rounded corners, and system bars.
     NormalizedRect GetSafeArea() const;
 
-    // Phones: lock the screen to landscape or portrait (either way up), or follow the sensor.
-    // Desktops: reshape the window to match, within the display.
+    // Phones: lock the screen to landscape or portrait (either way up, as the rotation lock
+    // allows), or follow the sensor; only if that's a change from what the activity has (its
+    // manifest's), since each request makes the system apply the rotation lock again. SDL's own
+    // requests are switched off (HyoshiActivity). Desktops: reshape the window to match, within the
+    // display.
     void SetOrientation(Orientation orientation);
 
     // For the RHI's surface creation, which DESIGN.md section 7 allows to use SDL directly.
@@ -237,6 +253,8 @@ private:
     bool isWindowResized = false;
     bool isCursorHidden = false;
     std::vector<std::string> droppedFiles;
+    std::string typedText;
+    bool isTextInputOn = false;
 };
 
 } // namespace hyoshi::platform

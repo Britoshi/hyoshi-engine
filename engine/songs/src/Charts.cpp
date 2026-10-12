@@ -2,6 +2,7 @@
 
 #include "line/PhigrosImport.h"
 #include "mania/ArcaeaJudge.h"
+#include "mania/StepManiaImport.h"
 #include "osu/OsuManiaImporter.h"
 #include "osu/OsuStandardImporter.h"
 #include "platform/Platform.h"
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <filesystem>
 #include <map>
@@ -71,6 +73,42 @@ std::string GetDirectory(const std::string& path)
 {
     const size_t slash = path.find_last_of("/\\");
     return slash == std::string::npos ? "" : path.substr(0, slash + 1);
+}
+
+bool HasStepManiaExtension(std::string_view file)
+{
+    return EndsWith(file, ".ssc") || EndsWith(file, ".sm");
+}
+
+// A StepMania chart path's file and chart ("Song.ssc#2"), or the path itself and 0.
+std::pair<std::string, size_t> SplitStepManiaPath(const std::string& path)
+{
+    const size_t hash = path.find_last_of('#');
+    if (hash != std::string::npos && HasStepManiaExtension(std::string_view(path).substr(0, hash)))
+    {
+        size_t index = 0;
+        const char* digits = path.data() + hash + 1;
+        const char* end = path.data() + path.size();
+        const auto [stop, error] = std::from_chars(digits, end, index);
+        if (error == std::errc{} && stop == end && digits != end)
+        {
+            return {path.substr(0, hash), index};
+        }
+    }
+    return {path, 0};
+}
+
+// Every chart of the StepMania file a chart path names, and which of them it names.
+hyoshi::Result<hyoshi::mania::StepManiaImportResult> ImportStepManiaFile(const std::string& path, size_t& index)
+{
+    auto [file, chart] = SplitStepManiaPath(path);
+    index = chart;
+    hyoshi::Result<std::vector<std::byte>> bytes = hyoshi::platform::LoadFile(file);
+    if (!bytes)
+    {
+        return bytes.GetError();
+    }
+    return hyoshi::mania::ImportStepMania({reinterpret_cast<const char*>(bytes.Value().data()), bytes.Value().size()});
 }
 
 } // namespace
@@ -207,6 +245,11 @@ hyoshi::Result<LoadedCircleChart> LoadCircleChartFile(const std::string& path)
     return loaded;
 }
 
+double GetMainBpm(const hyoshi::rhythm::Chart& info, SongTimeUs chartEnd)
+{
+    return GetLongestBpm(info, chartEnd);
+}
+
 double GetMainBpm(const ManiaChart& chart)
 {
     return GetLongestBpm(chart.Info, GetChartEnd(chart));
@@ -225,14 +268,15 @@ double GetMainBpm(const LoadedMixedChart& chart)
 uint32_t LoadedMixedChart::GetNoteCount() const
 {
     return static_cast<uint32_t>((Mania ? Mania->Notes.size() : 0) + (Arcaea ? Arcaea->Notes.size() : 0) +
-                                 (Lines ? Lines->Notes.size() : 0));
+                                 (Lines ? Lines->Notes.size() : 0) + (Circles ? Circles->Notes.size() : 0));
 }
 
 uint32_t LoadedMixedChart::GetJudgmentCount() const
 {
+    // A circle is judged once and a slider once per part: its combo.
     return (Mania ? Mania->GetJudgmentCount() : 0) +
            (Arcaea ? hyoshi::mania::ArcaeaJudge::GetJudgmentCount(*Arcaea) : 0) +
-           (Lines ? Lines->GetJudgmentCount() : 0);
+           (Lines ? Lines->GetJudgmentCount() : 0) + (Circles ? Circles->GetMaxCombo() : 0);
 }
 
 SongTimeUs LoadedMixedChart::GetEnd() const
@@ -253,7 +297,90 @@ SongTimeUs LoadedMixedChart::GetEnd() const
             end = std::max(end, note.EndTime);
         }
     }
+    if (Circles)
+    {
+        end = std::max(end, GetChartEnd(*Circles));
+    }
     return end;
+}
+
+bool IsStepManiaFile(const std::string& path)
+{
+    return HasStepManiaExtension(SplitStepManiaPath(path).first);
+}
+
+size_t CountStepManiaCharts(const std::string& path)
+{
+    size_t index = 0;
+    const hyoshi::Result<hyoshi::mania::StepManiaImportResult> imported = ImportStepManiaFile(path, index);
+    return imported ? imported.Value().Charts.size() : 0;
+}
+
+std::string MakeStepManiaChartPath(const std::string& file, size_t index)
+{
+    return index == 0 ? file : file + "#" + std::to_string(index);
+}
+
+void MarkSimultaneousAcrossModes(LoadedMixedChart& chart)
+{
+    // Each mode's note times, sorted.
+    std::vector<std::vector<SongTimeUs>> times;
+    const auto collect = [&times](const auto& notes)
+    {
+        std::vector<SongTimeUs>& list = times.emplace_back();
+        for (const auto& note : notes)
+        {
+            list.push_back(note.Time);
+        }
+        std::sort(list.begin(), list.end());
+    };
+    for (const std::optional<ManiaChart>* lanes : {&chart.Mania, &chart.Arcaea})
+    {
+        collect(*lanes ? (*lanes)->Notes : std::vector<hyoshi::mania::ManiaNote>{});
+    }
+    collect(chart.Lines ? chart.Lines->Notes : std::vector<hyoshi::line::LineNote>{});
+    collect(chart.Circles ? chart.Circles->Notes : std::vector<hyoshi::circle::CircleNote>{});
+    // Whether a mode other than `own` has a note within reach of `time`.
+    const auto isWithOther = [&times](size_t own, SongTimeUs time)
+    {
+        for (size_t mode = 0; mode < times.size(); ++mode)
+        {
+            if (mode == own)
+            {
+                continue;
+            }
+            const auto near =
+                std::lower_bound(times[mode].begin(), times[mode].end(), time - hyoshi::rhythm::SIMULTANEOUS_US);
+            if (near != times[mode].end() && *near <= time + hyoshi::rhythm::SIMULTANEOUS_US)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+    const auto mark = [&isWithOther](size_t own, auto& notes)
+    {
+        for (auto& note : notes)
+        {
+            note.IsSimultaneous = note.IsSimultaneous || isWithOther(own, note.Time);
+        }
+    };
+    if (chart.Mania)
+    {
+        mark(0, chart.Mania->Notes);
+    }
+    if (chart.Arcaea)
+    {
+        mark(1, chart.Arcaea->Notes);
+    }
+    if (chart.Lines)
+    {
+        mark(2, chart.Lines->Notes);
+    }
+    if (chart.Circles)
+    {
+        mark(3, chart.Circles->Notes);
+    }
 }
 
 bool IsPhigrosInfoFile(const std::string& path)
@@ -264,8 +391,31 @@ bool IsPhigrosInfoFile(const std::string& path)
 
 hyoshi::Result<LoadedMixedChart> LoadMixedChartFile(const std::string& path)
 {
+    if (IsMedleyFile(path))
+    {
+        return LoadMedleyFile(path);
+    }
     LoadedMixedChart loaded;
     loaded.Directory = GetDirectory(path);
+    if (IsStepManiaFile(path))
+    {
+        size_t index = 0;
+        hyoshi::Result<hyoshi::mania::StepManiaImportResult> imported = ImportStepManiaFile(path, index);
+        if (!imported)
+        {
+            return imported.GetError();
+        }
+        if (index >= imported.Value().Charts.size())
+        {
+            return hyoshi::Error{"The StepMania file has no chart " + std::to_string(index)};
+        }
+        hyoshi::mania::ManiaChart& chart = imported.Value().Charts[index];
+        loaded.Info = chart.Info;
+        loaded.BackgroundFile = imported.Value().BackgroundFile;
+        loaded.Warnings = std::move(imported.Value().Warnings);
+        loaded.Mania = std::move(chart);
+        return loaded;
+    }
     if (EndsWith(path, ".osu"))
     {
         hyoshi::Result<LoadedChart> mania = LoadChartFile(path);
@@ -360,6 +510,7 @@ hyoshi::Result<LoadedMixedChart> LoadMixedChartFile(const std::string& path)
     }
     loaded.Info = std::move(chart).Value();
     loaded.Info.Notes.clear();
+    MarkSimultaneousAcrossModes(loaded);
     return loaded;
 }
 

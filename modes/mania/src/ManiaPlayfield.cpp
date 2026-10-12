@@ -26,15 +26,19 @@ constexpr SongTimeUs DRAW_BEHIND_US = 1'000'000;
 constexpr SongTimeUs DRAW_AHEAD_US = 10'000'000;
 
 constexpr float ERROR_METER_HALF_WIDTH = 200.0f;
+// Notes due together glow this far around them (canvas units at the judgment line), this strongly.
+constexpr float SHINE_MARGIN = 6.0f;
+constexpr float SHINE_ALPHA = 0.75f;
 // The judgment banner's height above the judgment line.
 constexpr float BANNER_HEIGHT_ABOVE = 340.0f;
 
 // The track (PlayfieldView::Track) vanishes this far down the canvas, from the top. The eye is
 // this many judgment-line-to-horizon heights behind the judgment line: nearer is steeper. The far
 // end is drawn at this scale of the judgment line, and notes fade in over the last part of the way.
-constexpr float TRACK_HORIZON = 0.08f;
+// As Arcaea's, the track runs nearly to the top of the screen, a tenth as wide there.
+constexpr float TRACK_HORIZON = 0.04f;
 constexpr float TRACK_EYE_DISTANCE = 1.15f;
-constexpr float TRACK_FAR_SCALE = 0.2f;
+constexpr float TRACK_FAR_SCALE = 0.1f;
 constexpr float TRACK_FADE = 0.15f;
 
 // Notes appearing at the track's far end flare up and settle over this part of the way: a glow
@@ -103,15 +107,19 @@ struct TrackProjection
     float FarAlong;
 };
 
-// Mirrored lane colors, like most Mania skins: outer lanes white, next ones blue, a gold center
-// lane when there is one.
-Color GetLaneColor(uint32_t lane, uint32_t laneCount)
+// Mirrored lane colors, like most Mania skins: the style's (PlayfieldStyle::LaneColors) from the
+// outside in, or outer lanes white, next ones blue, and a gold center lane when there is one.
+Color GetLaneColor(uint32_t lane, uint32_t laneCount, const PlayfieldStyle& style)
 {
+    const uint32_t fromEdge = std::min(lane, laneCount - 1 - lane);
+    if (!style.LaneColors.empty())
+    {
+        return style.LaneColors[fromEdge % style.LaneColors.size()];
+    }
     if (laneCount % 2 == 1 && lane == laneCount / 2)
     {
         return {250, 210, 90, 255};
     }
-    const uint32_t fromEdge = std::min(lane, laneCount - 1 - lane);
     return fromEdge % 2 == 0 ? Color{235, 235, 245, 255} : Color{110, 180, 255, 255};
 }
 
@@ -193,6 +201,12 @@ float ManiaPlayfield::GetCenterX(glm::vec2 canvas, const PlayfieldStyle& style)
     return style.CenterX < 0.0f ? canvas.x * 0.5f : style.CenterX;
 }
 
+float ManiaPlayfield::GetTrackScaleAt(glm::vec2 canvas, const PlayfieldStyle& style, float y)
+{
+    const TrackProjection track(canvas, canvas.y - style.JudgeLineFromBottom, GetCenterX(canvas, style));
+    return std::max((y - track.HorizonY) / track.Height, TRACK_FAR_SCALE);
+}
+
 float ManiaPlayfield::GetJudgeLineX(glm::vec2 point, glm::vec2 canvas, const PlayfieldStyle& style) const
 {
     if (style.View != PlayfieldView::Track)
@@ -238,7 +252,7 @@ void ManiaPlayfield::Draw(renderer::SpriteBatch& sprites, glm::vec2 canvas, cons
     for (uint32_t lane = 0; lane < laneCount; ++lane)
     {
         const float x = left + (static_cast<float>(lane) * style.LaneWidth);
-        const Color laneColor = GetLaneColor(lane, laneCount);
+        const Color laneColor = GetLaneColor(lane, laneCount, style);
         const bool isHeld = judge.IsLaneHeld(lane);
         sprites.DrawRect({x + 4.0f, judgeY + 14.0f}, {style.LaneWidth - 8.0f, style.JudgeLineFromBottom - 28.0f},
                          WithAlpha(laneColor, isHeld ? 0.55f : 0.12f), BACKGROUND_LAYER);
@@ -279,7 +293,7 @@ void ManiaPlayfield::Draw(renderer::SpriteBatch& sprites, glm::vec2 canvas, cons
         }
 
         const bool isMissed = state == NoteState::Missed;
-        const Color color = WithAlpha(GetLaneColor(note.Lane, laneCount), isMissed ? 0.3f : 1.0f);
+        const Color color = WithAlpha(GetLaneColor(note.Lane, laneCount, style), isMissed ? 0.3f : 1.0f);
         const float x = left + (static_cast<float>(note.Lane) * style.LaneWidth) + 6.0f;
         const float noteWidth = style.LaneWidth - 12.0f;
 
@@ -303,6 +317,13 @@ void ManiaPlayfield::Draw(renderer::SpriteBatch& sprites, glm::vec2 canvas, cons
         }
         if (headY + style.NoteHeight >= 0.0f && headY - style.NoteHeight <= canvas.y)
         {
+            // Due with another (a chord): a glow around it.
+            if (note.IsSimultaneous)
+            {
+                sprites.DrawRect({x - SHINE_MARGIN, headY - (style.NoteHeight * 0.5f) - SHINE_MARGIN},
+                                 {noteWidth + (SHINE_MARGIN * 2.0f), style.NoteHeight + (SHINE_MARGIN * 2.0f)},
+                                 WithAlpha(renderer::SHINE, SHINE_ALPHA * (isMissed ? 0.3f : 1.0f)), NOTE_LAYER);
+            }
             sprites.DrawRect({x, headY - (style.NoteHeight * 0.5f)}, {noteWidth, style.NoteHeight}, color, NOTE_LAYER);
         }
     }
@@ -326,13 +347,14 @@ void ManiaPlayfield::DrawTrack(renderer::SpriteBatch& sprites, glm::vec2 canvas,
         const float lineHalf = isEdge ? 3.0f : 1.0f;
         const float x = laneLeft(lane);
         track.DrawQuad(sprites, x - lineHalf, x + lineHalf, track.NearAlong, track.FarAlong,
-                       isEdge ? TRACK_EDGE : TRACK_LINE, BACKGROUND_LAYER);
+                       isEdge ? (style.LaneColors.empty() ? TRACK_EDGE : style.LaneColors.front()) : TRACK_LINE,
+                       BACKGROUND_LAYER);
     }
     for (uint32_t lane = 0; lane < laneCount; ++lane)
     {
         const float left = laneLeft(lane);
         const float right = left + style.LaneWidth;
-        const Color laneColor = GetLaneColor(lane, laneCount);
+        const Color laneColor = GetLaneColor(lane, laneCount, style);
         const bool isHeld = judge.IsLaneHeld(lane);
         track.DrawQuad(sprites, left + 4.0f, right - 4.0f, track.NearAlong, -10.0f,
                        WithAlpha(laneColor, isHeld ? 0.55f : 0.12f), BACKGROUND_LAYER);
@@ -351,10 +373,18 @@ void ManiaPlayfield::DrawTrack(renderer::SpriteBatch& sprites, glm::vec2 canvas,
     }
     track.DrawQuad(sprites, -half, half, -3.0f, 3.0f, {240, 240, 255, 255}, OVERLAY_LAYER);
 
-    // Notes, from the far end of the track, fading in there.
+    // Notes, from the far end of the track, fading in there. The track shows as much time ahead as
+    // the flat lanes do at the same speed: their judgment line to the canvas's top is its length.
     const double scroll = chart.Scroll.GetPosition(time);
+    const double alongPerUnit =
+        static_cast<double>(track.FarAlong) / std::max(static_cast<double>(canvas.y - style.JudgeLineFromBottom), 1.0);
     const auto along = [&](double position)
-    { return static_cast<float>((position - scroll) * static_cast<double>(style.ScrollSpeed)); };
+    { return static_cast<float>((position - scroll) * static_cast<double>(style.ScrollSpeed) * alongPerUnit); };
+    // Notes and hold ends are as long in time as on flat lanes, so they're as thick against the
+    // gaps between them.
+    const auto toAlong = [&](float height) { return static_cast<float>(static_cast<double>(height) * alongPerUnit); };
+    const float halfHeight = toAlong(style.NoteHeight) * 0.5f;
+    const float tailHalf = toAlong(4.0f);
     const auto fadeIn = [&](float distance)
     { return std::clamp((track.FarAlong - distance) / (track.FarAlong * TRACK_FADE), 0.0f, 1.0f); };
     // 1 as a note appears at the far end, down to 0 once it has settled.
@@ -379,12 +409,12 @@ void ManiaPlayfield::DrawTrack(renderer::SpriteBatch& sprites, glm::vec2 canvas,
         }
         // A held note's head stays on the judgment line while its body drains into it.
         const float head = state == NoteState::Held ? 0.0f : along(note.ScrollPosition);
-        if (head - style.NoteHeight > track.FarAlong)
+        if (head - halfHeight > track.FarAlong)
         {
             continue;
         }
         const float alpha = state == NoteState::Missed ? 0.3f : 1.0f;
-        const Color color = GetLaneColor(note.Lane, laneCount);
+        const Color color = GetLaneColor(note.Lane, laneCount, style);
         const float left = laneLeft(note.Lane) + 6.0f;
         const float right = laneLeft(note.Lane) + style.LaneWidth - 6.0f;
         if (note.IsHold())
@@ -393,10 +423,17 @@ void ManiaPlayfield::DrawTrack(renderer::SpriteBatch& sprites, glm::vec2 canvas,
             const float inset = (right - left) * 0.15f;
             track.DrawQuad(sprites, left + inset, right - inset, std::min(head, tail), std::max(head, tail),
                            WithAlpha(color, alpha * (state == NoteState::Held ? 0.75f : 0.45f)), BODY_LAYER);
-            track.DrawQuad(sprites, left, right, tail - 4.0f, tail + 4.0f, WithAlpha(color, alpha * fadeIn(tail)),
-                           NOTE_LAYER);
+            track.DrawQuad(sprites, left, right, tail - tailHalf, tail + tailHalf,
+                           WithAlpha(color, alpha * fadeIn(tail)), NOTE_LAYER);
         }
-        const float halfHeight = style.NoteHeight * 0.5f;
+        // Due with another (a chord): a glow around it.
+        if (note.IsSimultaneous)
+        {
+            const float alongMargin = toAlong(SHINE_MARGIN);
+            track.DrawQuad(sprites, left - SHINE_MARGIN, right + SHINE_MARGIN, head - halfHeight - alongMargin,
+                           head + halfHeight + alongMargin,
+                           WithAlpha(renderer::SHINE, SHINE_ALPHA * alpha * fadeIn(head)), NOTE_LAYER);
+        }
         track.DrawQuad(sprites, left, right, head - halfHeight, head + halfHeight,
                        WithAlpha(color, alpha * fadeIn(head)), NOTE_LAYER);
 
@@ -439,7 +476,7 @@ void ManiaPlayfield::DrawTrack(renderer::SpriteBatch& sprites, glm::vec2 canvas,
     {
         const float gate = GATE_ALPHA + ((1.0f - GATE_ALPHA) * laneFlare[lane]);
         track.DrawQuad(sprites, laneLeft(lane), laneLeft(lane) + style.LaneWidth, track.FarAlong - GATE_DEPTH,
-                       track.FarAlong, WithAlpha(Brighten(GetLaneColor(lane, laneCount)), gate), OVERLAY_LAYER);
+                       track.FarAlong, WithAlpha(Brighten(GetLaneColor(lane, laneCount, style)), gate), OVERLAY_LAYER);
     }
 }
 
@@ -469,7 +506,7 @@ void ManiaPlayfield::DrawMeters(renderer::SpriteBatch& sprites, glm::vec2 canvas
     // Timing error meter under the lanes: early to the left, late to the right, fading ticks.
     const float meterY = judgeY + style.JudgeLineFromBottom - 40.0f;
     const float centerX = left + (width * 0.5f);
-    const int64_t badUs = rhythm::HitWindows{}.BadUs;
+    const int64_t badUs = std::max<int64_t>(style.ErrorMeterRangeUs, 1);
     sprites.DrawRect({centerX - ERROR_METER_HALF_WIDTH, meterY}, {ERROR_METER_HALF_WIDTH * 2.0f, 4.0f},
                      {60, 60, 80, 255}, OVERLAY_LAYER);
     sprites.DrawRect({centerX - 1.0f, meterY - 10.0f}, {2.0f, 24.0f}, {240, 240, 255, 255}, OVERLAY_LAYER);

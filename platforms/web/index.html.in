@@ -19,8 +19,9 @@
 <script>
   // Hyoshi web build. The WebGPU device is requested here, before the module starts, because
   // adapter and device requests are asynchronous; the engine picks it up through
-  // Module.preinitializedWebGPUDevice. Settings in the URL (?HYOSHI_AUTOPLAY=1) become environment
-  // variables (pre.js).
+  // Module.preinitializedWebGPUDevice. Without one (an older browser, a car's), the engine draws
+  // with WebGL 2 instead; ?renderer=webgl (or HYOSHI_RENDERER=webgl) picks it anyway. Settings in
+  // the URL (?HYOSHI_AUTOPLAY=1) become environment variables (pre.js).
   const statusText = document.getElementById("status");
   const fail = (message) => { statusText.textContent = message; console.error(message); };
 
@@ -31,28 +32,37 @@
                   "The server must send Cross-Origin-Opener-Policy: same-origin and\n" +
                   "Cross-Origin-Embedder-Policy: require-corp for this page.");
     }
-    if (!navigator.gpu) {
-      return fail("This browser doesn't support WebGPU.");
+    const params = new URLSearchParams(location.search);
+    const renderer = (params.get("renderer") ?? params.get("HYOSHI_RENDERER") ?? "").toLowerCase();
+    let device = null;
+    if (navigator.gpu && renderer !== "webgl") {
+      try {
+        const adapter = await navigator.gpu.requestAdapter();
+        device = adapter ? await adapter.requestDevice() : null;
+      } catch (error) {
+        console.warn("No WebGPU device, so WebGL 2:", error);
+        device = null;
+      }
     }
-    const adapter = await navigator.gpu.requestAdapter();
-    if (!adapter) {
-      return fail("No WebGPU adapter is available.");
+    if (!device && !document.createElement("canvas").getContext("webgl2")) {
+      return fail("This browser supports neither WebGPU nor WebGL 2.");
     }
-    const device = await adapter.requestDevice();
-    device.lost.then((info) => fail("The WebGPU device was lost: " + info.message));
 
     window.Module = {
       canvas: document.getElementById("canvas"),
-      preinitializedWebGPUDevice: device,
       webgpuErrorCount: 0,
       setStatus: (text) => { if (text) statusText.textContent = text; },
       onRuntimeInitialized: () => { statusText.textContent = ""; },
       onAbort: (what) => fail("The game stopped: " + what),
     };
-    device.addEventListener("uncapturederror", (event) => {
-      window.Module.webgpuErrorCount++;
-      console.error("WebGPU:", event.error.message);
-    });
+    if (device) {
+      window.Module.preinitializedWebGPUDevice = device;
+      device.lost.then((info) => fail("The WebGPU device was lost: " + info.message));
+      device.addEventListener("uncapturederror", (event) => {
+        window.Module.webgpuErrorCount++;
+        console.error("WebGPU:", event.error.message);
+      });
+    }
 
     const script = document.createElement("script");
     script.src = "@APP_OUTPUT_NAME@.js";

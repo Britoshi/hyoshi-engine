@@ -16,7 +16,11 @@ namespace hyoshi::mania
 enum class ManiaAction : uint16_t
 {
     Press,
-    Release
+    Release,
+    // The lane is held without a press (a finger whose press went to another mode, in a chart that
+    // mixes them): it strikes nothing, but Arcaea's holds count it as holding. Mania's holds start
+    // with a press, so ManiaJudge only marks the lane held.
+    Touch
 };
 
 rhythm::GameplayAction MakeAction(ManiaAction type, uint32_t lane, SongTimeUs time);
@@ -128,5 +132,10 @@ private:
 // Perfectly timed actions for every note: a press on time, and a release at the end of a hold or
 // shortly after a tap. For demos and tests.
 std::vector<rhythm::GameplayAction> MakeAutoplayActions(const ManiaChart& chart);
+
+// osu!mania's windows for an overall difficulty (0 to 10): a MAX within 16 ms, and a 300, 200, and
+// 100 within 64, 97, and 127 ms less 3 per OD, as Perfect, Great, Good, and Bad. Its 50s aren't
+// judged: a press later than a 100 is ignored, as with any windows. OD 8 gives the defaults.
+rhythm::HitWindows GetOsuManiaWindows(double overallDifficulty);
 
 } // namespace hyoshi::mania

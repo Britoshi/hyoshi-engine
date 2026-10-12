@@ -23,8 +23,20 @@ struct PhigrosImportResult
 // (type 1 tap, 2 drag, 3 hold, 4 flick; positionX, holdTime, speed), and speed, move, rotate, and
 // disappear events, which become the line's keys (rotation as Phigros turns it, counterclockwise).
 // floorPosition is computed again from the speed events. "offset" (seconds) becomes the chart
-// offset. Metadata and audio come from the package's info (ReadPhigrosInfo).
+// offset. Metadata and audio come from the package's info (ReadPhigrosInfo). A chart in
+// Re:PhiEdit's format goes to ImportRpe.
 Result<PhigrosImportResult> ImportPhigros(std::string_view json);
+
+// A chart in Re:PhiEdit's format (RPE, as most fan charts are, and Phira plays): what of it plays.
+// Times are beats ([bar, numerator, denominator]) along one BPM list; lines move on a 1350 by 900
+// canvas, centered, y up, turning clockwise; events come in layers that add up, each eased by one
+// of RPE's 29 easings (or part of one). They're baked into keys: eased events into straight pieces,
+// speed ramps into steps, and a line with a parent carries its parent's movement. A line with a
+// texture (a storyboard's picture) draws it (JudgeLine::Picture: a pixel is a canvas unit, scaled
+// by the line's scale, set by its anchor). Lines that show text, paint, or carry the UI hide unless
+// they have notes, and fake notes are left out; incline is left out too. ImportPhigros hands such
+// charts here.
+Result<PhigrosImportResult> ImportRpe(std::string_view json);
 
 // A Phigros chart package's info: Phira's info.yml (name, composer, charter, level, music, chart,
 // illustration) or the older info.txt (Name, Composer, Charter, Level, Song, Chart, Picture), as

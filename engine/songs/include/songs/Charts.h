@@ -81,6 +81,17 @@ struct LoadedMixedChart
     std::optional<hyoshi::mania::ManiaChart> Mania;
     std::optional<hyoshi::mania::ManiaChart> Arcaea;
     std::optional<hyoshi::line::LineChart> Lines;
+    // osu!standard circles, in a medley.
+    std::optional<hyoshi::circle::CircleChart> Circles;
+    // A medley's parts, in order: which modes play from Start until End. Empty for a chart whose
+    // modes play together throughout.
+    struct Part
+    {
+        std::vector<std::string> Modes;
+        hyoshi::SongTimeUs Start = 0;
+        hyoshi::SongTimeUs End = 0;
+    };
+    std::vector<Part> Parts;
     // The chart's audio and images resolve against this directory (with a trailing separator, or
     // empty).
     std::string Directory;
@@ -95,14 +106,41 @@ struct LoadedMixedChart
     hyoshi::SongTimeUs GetEnd() const;
 };
 
-// Reads a .rchart.json of any of those modes (format 1 or 2), an osu!mania .osu (mania), or a
-// Phigros chart package's info.yml or info.txt, whose chart it imports (line::ImportPhigros).
+// Reads a .rchart.json of any of those modes (format 1 or 2), an osu!mania .osu (mania), a chart
+// of a StepMania file (mania; IsStepManiaFile), a Phigros chart package's info.yml or info.txt,
+// whose chart it imports (line::ImportPhigros), or a medley (LoadMedleyFile).
 hyoshi::Result<LoadedMixedChart> LoadMixedChartFile(const std::string& path);
+
+// Marks notes due together with a note of another of the chart's modes (rhythm::SIMULTANEOUS_US),
+// so they shine as chords do: a circle and a Phigros note at one time, say.
+void MarkSimultaneousAcrossModes(LoadedMixedChart& chart);
 
 // A Phigros package's info file, which stands for its chart in a song folder.
 bool IsPhigrosInfoFile(const std::string& path);
 
+// A medley (.medley.json): one song played in parts, each from another chart of it, as its own
+// mode (lanes, Phigros lines, or osu!standard circles), all on one audio file. It names its audio
+// ("audio", "audioOffsetMs" as a chart's offset), its "sources" (each a "name", a "chart" file
+// beside it that LoadMixedChartFile reads or an osu!standard .osu, "audioLagMs", how far into the
+// medley's audio the source's own audio starts, and optionally "offsetMs", an offset to sync the
+// source chart by in place of its own, and "lanesAs", "mania" or "arcaea", to play its lanes as
+// that mode's), and its "parts" (each a "source", a source's name or a list of them that play
+// together, and "untilMs", the part playing from the end of the one before it until then, the last
+// to the end). Each source keeps only its notes in its parts, moved onto the medley's clock; the
+// chart's Parts say which modes play when. One source each can have lanes and lines; several can
+// have circles (each its own parts), merged under the first's difficulty and colors. Also "title",
+// "artist", "charter", "difficultyName", "pack", "background", and "previewMs".
+bool IsMedleyFile(const std::string& path);
+hyoshi::Result<LoadedMixedChart> LoadMedleyFile(const std::string& path);
+
+// StepMania files (.sm, .ssc) hold several charts. A chart path names one of them by its place
+// among the charts the file plays, from 0, after a '#' ("Song.ssc#2"); the file alone is its first.
+bool IsStepManiaFile(const std::string& path);
+size_t CountStepManiaCharts(const std::string& path);
+std::string MakeStepManiaChartPath(const std::string& file, size_t index);
+
 // The BPM that lasts longest in the chart, or 0 without timing.
+double GetMainBpm(const hyoshi::rhythm::Chart& info, SongTimeUs chartEnd);
 double GetMainBpm(const hyoshi::mania::ManiaChart& chart);
 double GetMainBpm(const hyoshi::circle::CircleChart& chart);
 double GetMainBpm(const LoadedMixedChart& chart);

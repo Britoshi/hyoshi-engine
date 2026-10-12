@@ -1,6 +1,7 @@
 #include "mania/ManiaJudge.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace hyoshi::mania
 {
@@ -11,7 +12,21 @@ namespace
 // How long autoplay holds a tap.
 constexpr SongTimeUs AUTOPLAY_TAP_US = 50'000;
 
+constexpr double MAX_OVERALL_DIFFICULTY = 10.0;
+
 } // namespace
+
+rhythm::HitWindows GetOsuManiaWindows(double overallDifficulty)
+{
+    const double od = std::clamp(overallDifficulty, 0.0, MAX_OVERALL_DIFFICULTY);
+    const auto window = [od](double ms) { return static_cast<int64_t>(std::llround((ms - (3.0 * od)) * 1000.0)); };
+    rhythm::HitWindows windows;
+    windows.PerfectUs = 16'000;
+    windows.GreatUs = window(64.0);
+    windows.GoodUs = window(97.0);
+    windows.BadUs = window(127.0);
+    return windows;
+}
 
 rhythm::GameplayAction MakeAction(ManiaAction type, uint32_t lane, SongTimeUs time)
 {
@@ -135,6 +150,11 @@ void ManiaJudge::ProcessAction(const rhythm::GameplayAction& action, std::vector
     const SongTimeUs actionTime = std::max(action.Time, time);
     Advance(actionTime, events);
     Lane& lane = lanes[action.Index];
+    if (action.Type == static_cast<uint16_t>(ManiaAction::Touch))
+    {
+        lane.IsHeld = true;
+        return;
+    }
 
     if (action.Type == static_cast<uint16_t>(ManiaAction::Press))
     {

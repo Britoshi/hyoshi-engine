@@ -19,6 +19,7 @@ add_executable(hyoshi_unit_tests
     ResultTests.cpp
     SongClockTests.cpp
     SongLibraryTests.cpp
+    StepManiaTests.cpp
     TextTests.cpp
     TrackpadTests.cpp
     UiTests.cpp

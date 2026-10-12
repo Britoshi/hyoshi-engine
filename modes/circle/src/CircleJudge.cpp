@@ -53,10 +53,10 @@ glm::vec2 GetActionPosition(const rhythm::GameplayAction& action)
     return {static_cast<float>(action.X) / ACTION_POSITION_SCALE, static_cast<float>(action.Y) / ACTION_POSITION_SCALE};
 }
 
-void CircleJudge::Reset(const CircleChart& circleChart)
+void CircleJudge::Reset(const CircleChart& circleChart, const std::optional<CircleWindows>& givenWindows)
 {
     chart = &circleChart;
-    windows = chart->Difficulty.GetWindows();
+    windows = givenWindows.value_or(chart->Difficulty.GetWindows());
     radius = chart->Difficulty.GetRadius();
     const size_t count = chart->Notes.size();
     states.assign(count, NoteState::Pending);
@@ -114,8 +114,22 @@ void CircleJudge::ProcessAction(const rhythm::GameplayAction& action, std::vecto
     case CircleAction::Move:
         pointer.Position = position;
         break;
+    case CircleAction::Touch:
+        pointer.Position = position;
+        pointer.IsDown = true;
+        break;
     }
     UpdateFollowingAll();
+}
+
+std::optional<SongTimeUs> CircleJudge::GetPressTarget(glm::vec2 position, SongTimeUs at) const
+{
+    const std::optional<Target> target = FindTarget(position, std::max(at, time));
+    if (!target || target->IsBlocked)
+    {
+        return std::nullopt;
+    }
+    return chart->Notes[target->Note].Time;
 }
 
 // The earliest check due by `limit`: by time, then by note. Every check of a note comes at or
@@ -195,13 +209,13 @@ void CircleJudge::RunCheck(const Check& check, std::vector<rhythm::JudgmentEvent
     }
 }
 
-std::optional<CircleJudge::Target> CircleJudge::FindTarget(glm::vec2 position) const
+std::optional<CircleJudge::Target> CircleJudge::FindTarget(glm::vec2 position, SongTimeUs at) const
 {
     const std::vector<CircleNote>& notes = chart->Notes;
     for (uint32_t i = firstActive; i < notes.size(); ++i)
     {
         const CircleNote& note = notes[i];
-        const SongTimeUs untilNote = note.Time - time;
+        const SongTimeUs untilNote = note.Time - at;
         // Time order: nothing after the first note beyond the horizon can match.
         if (untilNote > SCAN_AHEAD_US)
         {
@@ -221,7 +235,7 @@ std::optional<CircleJudge::Target> CircleJudge::FindTarget(glm::vec2 position) c
         }
         else
         {
-            if (time > note.EndTime || note.PathPointCount < 2)
+            if (at > note.EndTime || note.PathPointCount < 2)
             {
                 continue;
             }
@@ -241,7 +255,7 @@ std::optional<CircleJudge::Target> CircleJudge::FindTarget(glm::vec2 position) c
                 blocker = j;
             }
         }
-        return Target{i, blocker && time < notes[*blocker].Time};
+        return Target{i, blocker && at < notes[*blocker].Time};
     }
     return std::nullopt;
 }
@@ -252,7 +266,7 @@ void CircleJudge::Press(uint32_t pointerIndex, glm::vec2 position, std::vector<r
     pointer.Position = position;
     pointer.IsDown = true;
 
-    const std::optional<Target> target = FindTarget(position);
+    const std::optional<Target> target = FindTarget(position, time);
     // A blocked press is spent: nothing is judged.
     if (!target || target->IsBlocked)
     {

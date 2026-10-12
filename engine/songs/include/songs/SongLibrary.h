@@ -34,6 +34,12 @@ struct LibraryChart
     hyoshi::SongTimeUs PreviewUs = 0;
     // The chart's background image, or empty.
     std::string BackgroundPath;
+    // Words to search by besides its details: an osu! map's tags and source, a StepMania song's
+    // genre.
+    std::string Tags;
+    // The folder in a song folder the chart is in: its map set's, or its StepMania pack's. Empty
+    // for a chart right in a song folder.
+    std::string Pack;
 };
 
 // One song: the difficulties of one map set with the same artist and title.
@@ -45,14 +51,18 @@ struct LibrarySong
     std::vector<LibraryChart> Charts;
 };
 
-// Reads one chart file for the library: its details, or nothing if it isn't a chart the game
-// plays. Runs on a worker, so it only reads the file.
-using ChartReader = std::optional<LibraryChart> (*)(const std::string& path);
+// Reads one chart file for the library: the details of each chart in it the game plays (none if
+// it plays none; a StepMania file can hold several). Runs on a worker, so it only reads the file.
+// The engine's readers read only what a song list shows of .osu and StepMania files, not building
+// their charts (a game loads a chart in full to play it); other files are loaded.
+using ChartReader = std::vector<LibraryChart> (*)(const std::string& path);
 
-// The engine's readers: Mania charts (.rchart.json of the lane and line modes, osu!mania .osu, and
-// Phigros packages' info files: LoadMixedChartFile), and circle charts (osu!standard .osu).
-std::optional<LibraryChart> ReadManiaChart(const std::string& path);
-std::optional<LibraryChart> ReadCircleChart(const std::string& path);
+// The engine's readers: Mania charts (.rchart.json of the lane and line modes, osu!mania .osu,
+// StepMania .sm and .ssc, and Phigros packages' info files: LoadMixedChartFile), circle charts
+// (osu!standard .osu, with Modes {"circle"}), and either.
+std::vector<LibraryChart> ReadManiaChart(const std::string& path);
+std::vector<LibraryChart> ReadCircleChart(const std::string& path);
+std::vector<LibraryChart> ReadAnyChart(const std::string& path);
 
 // What became of one archive given to SongLibrary::Import.
 struct ImportResult
@@ -72,8 +82,9 @@ struct LibraryOptions
     bool HasBuiltInChart = true;
 };
 
-// The songs in the song folders: map folders holding chart files (.osu or .rchart.json), and
-// charts directly in a song folder, read with the options' reader. Scans run on a worker.
+// The songs in the song folders: chart files (.osu, .rchart.json, .sm, .ssc, and Phigros info
+// files) directly in a song folder or in folders up to three deep (a map set, or a StepMania
+// pack's song folders), read with the options' reader. Scans run on a worker.
 class SongLibrary
 {
 public:
@@ -89,8 +100,9 @@ public:
     // Starts scanning the folders again.
     void Rescan();
 
-    // Unpacks osu! map sets (.osz) into their own folders in destination on a worker, then
-    // rescans; see UnpackOsz. Archives given while an import runs wait for it.
+    // Unpacks map sets (osu!'s .osz, Phigros packages; IsMapArchive) into their own folders in
+    // destination on a worker, then rescans; see UnpackOsz. Archives given while an import runs
+    // wait for it.
     void Import(std::vector<std::string> archives, std::string destination);
 
     bool IsImporting() const
@@ -140,10 +152,12 @@ private:
 // Scans the folders; exposed for tests.
 std::vector<LibrarySong> ScanSongFolders(const std::vector<std::string>& folders, const LibraryOptions& options = {});
 
-// Debug APKs carry the maps from content/charts as assets in dev-songs/, listed with their sizes
-// in dev-songs/index.txt (platforms/android/app/build.gradle). Assets aren't files the library
-// can scan, so this copies them into a folder, skipping files already there at the same size.
-// Returns false if there's no index: release builds, and desktops, which read content/charts.
+// Debug APKs carry the maps from content/charts as assets in bundled-songs/, listed with their
+// sizes in bundled-songs/index.txt (platforms/android/hyoshi-app.gradle), and a test build those it names
+// (-PhyoshiSongs). Assets aren't files the library can scan, so this copies them into a folder,
+// skipping files already there at the same size. `destination` mustn't be the asset folder's name
+// in the app's files (SDL would read assets there first). Returns false if there's no index: other
+// release builds, and desktops, which read content/charts.
 bool UnpackBundledSongs(const std::string& assetFolder, const std::string& destination);
 
 } // namespace hyoshi::songs

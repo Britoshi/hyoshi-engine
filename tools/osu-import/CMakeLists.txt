@@ -1,4 +1,5 @@
 add_library(hyoshi_osu_import STATIC
+    src/OsuInfo.cpp
     src/OsuManiaImporter.cpp
     src/OsuStandardImporter.cpp
 )

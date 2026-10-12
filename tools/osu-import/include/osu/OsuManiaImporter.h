@@ -15,6 +15,7 @@ namespace hyoshi::osu
 // (DESIGN.md section 13.4). Imported charts stay local unless their author permits otherwise.
 //
 // - Lanes: floor(x * keys / 512), with the key count from CircleSize.
+// - OverallDifficulty: kept in the metadata, for a game that judges by it.
 // - Holds: type bit 128, end time in the extras.
 // - Timing: every uninherited point becomes a timing point.
 // - Scroll velocity: inherited points set it (-100 / beatLength, clamped to 0.1..10, as osu!

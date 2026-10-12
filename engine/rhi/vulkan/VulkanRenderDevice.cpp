@@ -843,6 +843,7 @@ void VulkanRenderDevice::DestroySurface()
     swapchain.Destroy();
     vkDestroySurfaceKHR(instance, surface, nullptr);
     surface = VK_NULL_HANDLE;
+    isSurfaceLost = false;
 }
 
 bool VulkanRenderDevice::HasSurface() const
@@ -1045,6 +1046,12 @@ FrameStatus VulkanRenderDevice::BeginFrame()
     {
         return FrameStatus::Skipped;
     }
+    if (isSurfaceLost)
+    {
+        HYOSHI_LOG_WARN("The surface was lost; releasing it for a new one");
+        DestroySurface();
+        return FrameStatus::Skipped;
+    }
 
     if (isSwapchainDirty || !swapchain.IsValid())
     {
@@ -1081,6 +1088,7 @@ FrameStatus VulkanRenderDevice::BeginFrame()
     else if (acquireResult != VK_SUCCESS)
     {
         HYOSHI_LOG_ERROR("vkAcquireNextImageKHR failed: {}", ToString(acquireResult));
+        isSurfaceLost = acquireResult == VK_ERROR_SURFACE_LOST_KHR;
         return FrameStatus::Skipped;
     }
 
@@ -1163,6 +1171,7 @@ void VulkanRenderDevice::EndFrameAndPresent()
     else if (presentResult != VK_SUCCESS)
     {
         HYOSHI_LOG_ERROR("vkQueuePresentKHR failed: {}", ToString(presentResult));
+        isSurfaceLost = presentResult == VK_ERROR_SURFACE_LOST_KHR;
     }
 
     isFrameActive = false;

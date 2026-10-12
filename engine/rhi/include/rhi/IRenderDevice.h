@@ -93,7 +93,8 @@ public:
     virtual void RequestScreenshot(std::string path) = 0;
 };
 
-// Creates the backend chosen at build time (Vulkan).
+// Creates the backend: Vulkan, or on the web WebGPU where the page got a device and WebGL 2
+// otherwise.
 std::unique_ptr<IRenderDevice> CreateRenderDevice();
 
 } // namespace hyoshi::rhi

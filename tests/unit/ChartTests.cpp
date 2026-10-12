@@ -39,7 +39,8 @@ const char* const EXAMPLE_CHART = R"({
   "formatVersion": 1,
   "mode": "mania",
   "metadata": {"title": "Example Song", "artist": "Example Artist", "charter": "Britoshi",
-               "difficultyName": "Hard", "difficultyValue": 7.5, "previewStartUs": 45000000},
+               "difficultyName": "Hard", "difficultyValue": 7.5, "previewStartUs": 45000000,
+               "pack": "Example Pack"},
   "audio": {"file": "audio/example.ogg", "offsetUs": 1500},
   "timing": [{"timeUs": 0, "bpm": 180.0, "meter": [4, 4]},
              {"timeUs": 64000000, "bpm": 90.0, "meter": [3, 4]}],
@@ -76,6 +77,7 @@ TEST_CASE("The design document's example chart loads")
     CHECK(chart.Info.Metadata.Title == "Example Song");
     CHECK(chart.Info.Metadata.DifficultyValue == doctest::Approx(7.5));
     CHECK(chart.Info.Metadata.PreviewStartUs == 45'000'000);
+    CHECK(chart.Info.Metadata.Pack == "Example Pack");
     CHECK(chart.Info.AudioFile == "audio/example.ogg");
     CHECK(chart.Info.AudioOffsetUs == 1500);
     REQUIRE(chart.Info.Timing.size() == 2);
@@ -127,6 +129,7 @@ TEST_CASE("Writing a chart and reading it back gives the same chart")
     const ManiaChart& a = original.Value();
     const ManiaChart& b = reread.Value();
     CHECK(b.Info.Metadata.Title == a.Info.Metadata.Title);
+    CHECK(b.Info.Metadata.Pack == "Example Pack");
     CHECK(b.Info.AudioOffsetUs == a.Info.AudioOffsetUs);
     CHECK(b.Info.Timing.size() == a.Info.Timing.size());
     CHECK(b.Info.Timing[1].BeatsPerBar == a.Info.Timing[1].BeatsPerBar);

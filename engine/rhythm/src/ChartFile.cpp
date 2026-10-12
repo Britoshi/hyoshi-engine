@@ -119,6 +119,7 @@ Result<void> ReadMetadata(const ChartFields& fields, ChartMetadata& metadata)
         Assign(fields.GetString("difficultyName", ""), metadata.DifficultyName),
         Assign(fields.GetNumber("difficultyValue", 0.0), metadata.DifficultyValue),
         Assign(fields.GetInt("previewStartUs", 0), metadata.PreviewStartUs),
+        Assign(fields.GetString("pack", ""), metadata.Pack),
     };
     for (const Result<void>& result : results)
     {
@@ -126,6 +127,15 @@ Result<void> ReadMetadata(const ChartFields& fields, ChartMetadata& metadata)
         {
             return result;
         }
+    }
+    if (fields.Has("overallDifficulty"))
+    {
+        Result<double> overallDifficulty = fields.GetNumber("overallDifficulty");
+        if (!overallDifficulty)
+        {
+            return overallDifficulty.GetError();
+        }
+        metadata.OverallDifficulty = overallDifficulty.Value();
     }
     return {};
 }
@@ -266,6 +276,94 @@ Result<void> ChartFields::ForEachObject(std::string_view key,
     return hyoshi::rhythm::ForEachObject(array.Value(), key,
                                          [&fn](const ChartFields& fields, const yyjson_val*, size_t index)
                                          { return fn(fields, index); });
+}
+
+Result<void> ChartFields::ForEachPresentObject(std::string_view key,
+                                               const std::function<Result<void>(const ChartFields&, size_t)>& fn) const
+{
+    const yyjson_val* value = Find(key);
+    if (value == nullptr || yyjson_is_null(const_cast<yyjson_val*>(value)))
+    {
+        return {};
+    }
+    if (!yyjson_is_arr(const_cast<yyjson_val*>(value)))
+    {
+        return Error{Quote(key) + " must be an array"};
+    }
+    size_t index = 0;
+    size_t count = 0;
+    yyjson_val* element = nullptr;
+    yyjson_arr_foreach(const_cast<yyjson_val*>(value), index, count, element)
+    {
+        if (yyjson_is_null(element))
+        {
+            continue;
+        }
+        const std::string context = std::string(key) + "[" + std::to_string(index) + "]";
+        if (!yyjson_is_obj(element))
+        {
+            return Error{context + " must be an object"};
+        }
+        if (Result<void> result = fn(ChartFields(element), index); !result)
+        {
+            return WithContext(context, result.GetError());
+        }
+    }
+    return {};
+}
+
+Result<ChartFields> ChartFields::GetObject(std::string_view key) const
+{
+    const yyjson_val* value = Find(key);
+    if (value == nullptr || !yyjson_is_obj(const_cast<yyjson_val*>(value)))
+    {
+        return Error{Quote(key) + " must be an object"};
+    }
+    return ChartFields(value);
+}
+
+Result<std::vector<double>> ChartFields::GetNumbers(std::string_view key) const
+{
+    const yyjson_val* value = Find(key);
+    if (value == nullptr || !yyjson_is_arr(const_cast<yyjson_val*>(value)))
+    {
+        return Error{Quote(key) + " must be an array of numbers"};
+    }
+    std::vector<double> numbers;
+    size_t index = 0;
+    size_t count = 0;
+    yyjson_val* element = nullptr;
+    yyjson_arr_foreach(const_cast<yyjson_val*>(value), index, count, element)
+    {
+        if (!yyjson_is_num(element))
+        {
+            return Error{Quote(key) + " must be an array of numbers"};
+        }
+        numbers.push_back(yyjson_get_num(element));
+    }
+    return numbers;
+}
+
+Result<std::vector<std::string>> ChartFields::GetStrings(std::string_view key) const
+{
+    const yyjson_val* value = Find(key);
+    if (value == nullptr || !yyjson_is_arr(const_cast<yyjson_val*>(value)))
+    {
+        return Error{Quote(key) + " must be an array of strings"};
+    }
+    std::vector<std::string> strings;
+    size_t index = 0;
+    size_t count = 0;
+    yyjson_val* element = nullptr;
+    yyjson_arr_foreach(const_cast<yyjson_val*>(value), index, count, element)
+    {
+        if (!yyjson_is_str(element))
+        {
+            return Error{Quote(key) + " must be an array of strings"};
+        }
+        strings.emplace_back(yyjson_get_str(element), yyjson_get_len(element));
+    }
+    return strings;
 }
 
 void ChartFieldWriter::AddInt(std::string_view key, int64_t value)
@@ -676,6 +774,14 @@ Result<std::string> WriteChartFile(const Chart& chart, std::span<const ChartMode
     metadata.AddString("difficultyName", chart.Metadata.DifficultyName);
     metadata.AddNumber("difficultyValue", chart.Metadata.DifficultyValue);
     metadata.AddInt("previewStartUs", chart.Metadata.PreviewStartUs);
+    if (!chart.Metadata.Pack.empty())
+    {
+        metadata.AddString("pack", chart.Metadata.Pack);
+    }
+    if (chart.Metadata.OverallDifficulty)
+    {
+        metadata.AddNumber("overallDifficulty", *chart.Metadata.OverallDifficulty);
+    }
 
     ChartFieldWriter audio(doc, yyjson_mut_obj_add_obj(doc, root, "audio"));
     audio.AddString("file", chart.AudioFile);

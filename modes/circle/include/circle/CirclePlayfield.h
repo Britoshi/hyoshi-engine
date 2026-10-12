@@ -11,7 +11,9 @@
 
 #include <glm/vec2.hpp>
 
+#include <array>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace hyoshi::circle
@@ -45,10 +47,15 @@ struct CirclePlayfieldStyle
     // Combo numbers.
     renderer::FontId NumberFont = 0;
     bool AreComboNumbersShown = true;
+    // Notes in their combo's color (CircleChart::ComboColors), with a white rim and a dark halo so
+    // they stand out on any background. Off, or for a chart without colors, the playfield's gray.
+    bool AreComboColorsShown = true;
     // The dashes between consecutive notes of a combo.
     bool AreFollowPointsShown = true;
     // Follow point thickness, as a fraction of a circle's diameter.
     float FollowPointThickness = 0.035f;
+    // The result marks for a Great, a Good, and a Bad (a miss is an X).
+    std::array<const char*, 3> MarkTexts{"300", "100", "50"};
 };
 
 // Draws a circle chart with SpriteBatch (DESIGN.md section 16.4):
@@ -109,7 +116,9 @@ private:
 
     void DrawFollowPoints(const Frame& frame);
     void DrawSliderBody(const Frame& frame, uint32_t note) const;
+    void DrawReverseArrows(const Frame& frame, uint32_t note) const;
     void DrawHead(const Frame& frame, uint32_t note) const;
+    static std::optional<renderer::Color> GetComboColor(const Frame& frame, const CircleNote& note);
     void DrawTicks(const Frame& frame, uint32_t note, float start, float end) const;
     void DrawSliderBall(const Frame& frame, uint32_t note) const;
     void DrawApproach(const Frame& frame, uint32_t note) const;

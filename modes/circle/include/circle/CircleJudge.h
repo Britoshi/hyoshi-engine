@@ -22,7 +22,10 @@ enum class CircleAction : uint16_t
     // The pointer let go (every button and key up, or the finger lifted).
     Release,
     // The pointer moved.
-    Move
+    Move,
+    // The pointer came down without a press: a finger down for another mode's note, in a game
+    // mixing modes. It follows sliders, and strikes nothing.
+    Touch
 };
 
 // Positions are stored in 1/64 playfield units, so replays keep sub-unit aim.
@@ -67,13 +70,19 @@ enum class NoteState : uint8_t
 class CircleJudge
 {
 public:
-    void Reset(const CircleChart& chart);
+    // Judges by `windows` if given, else by the chart's OverallDifficulty.
+    void Reset(const CircleChart& chart, const std::optional<CircleWindows>& windows = std::nullopt);
 
     // Judges everything due by `time`: misses, and slider parts.
     void Advance(SongTimeUs time, std::vector<rhythm::JudgmentEvent>& events);
 
     // Advances to the action's time (or stays, if it's older), then applies it.
     void ProcessAction(const rhythm::GameplayAction& action, std::vector<rhythm::JudgmentEvent>& events);
+
+    // When the note a press at `position` would strike at `time` is due, if any (a press note lock
+    // blocks strikes nothing): so a game mixing modes can give the press to the mode with the note
+    // due first.
+    std::optional<SongTimeUs> GetPressTarget(glm::vec2 position, SongTimeUs time) const;
 
     SongTimeUs GetTime() const
     {
@@ -115,7 +124,7 @@ private:
         bool IsDown = false;
     };
 
-    // What a press at the current time and `position` strikes, if anything.
+    // What a press at `position` at a time strikes, if anything.
     struct Target
     {
         uint32_t Note = 0;
@@ -139,7 +148,7 @@ private:
     std::optional<Check> FindNextCheck(SongTimeUs limit) const;
     void RunCheck(const Check& check, std::vector<rhythm::JudgmentEvent>& events);
 
-    std::optional<Target> FindTarget(glm::vec2 position) const;
+    std::optional<Target> FindTarget(glm::vec2 position, SongTimeUs at) const;
     void Press(uint32_t pointer, glm::vec2 position, std::vector<rhythm::JudgmentEvent>& events);
     void MissCirclesBefore(uint32_t note, std::vector<rhythm::JudgmentEvent>& events);
     // A circle's result, or a slider head's.

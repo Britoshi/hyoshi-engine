@@ -29,6 +29,9 @@ constexpr int STANDARD_MODE = 0;
 constexpr int CIRCLE_BIT = 1;
 constexpr int SLIDER_BIT = 2;
 constexpr int NEW_COMBO_BIT = 4;
+// A new combo's color skip: three bits from bit 4.
+constexpr int COLOR_SKIP_SHIFT = 4;
+constexpr int COLOR_SKIP_MASK = 7;
 constexpr int SPINNER_BIT = 8;
 constexpr int HOLD_BIT = 128;
 constexpr double MIN_SV = 0.1;
@@ -201,6 +204,8 @@ Result<OsuStandardImportResult> ImportOsuStandard(std::string_view osuText)
     double audioLeadInMs = 0.0;
     std::vector<OsuTimingPoint> timingPoints;
     std::vector<OsuHitObject> hitObjects;
+    // [Colours]' ComboN, with their N.
+    std::vector<std::pair<int, glm::vec3>> comboColors;
     size_t pathTypeChanges = 0;
 
     std::string section;
@@ -314,6 +319,30 @@ Result<OsuStandardImportResult> ImportOsuStandard(std::string_view osuText)
             {
                 chart.Difficulty.SliderTickRate = *number;
             }
+        }
+        else if (section == "Colours")
+        {
+            // ComboN : r,g,b, in N's order.
+            const size_t colon = line.find(':');
+            const std::string_view key = Trim(line.substr(0, colon));
+            if (colon == std::string_view::npos || !key.starts_with("Combo"))
+            {
+                continue;
+            }
+            const std::optional<double> index = ParseNumber(key.substr(5));
+            const std::vector<std::string_view> channels = Split(line.substr(colon + 1), ',');
+            if (!index || *index < 1.0 || channels.size() < 3)
+            {
+                result.Warnings.push_back(where + ": unreadable combo color, skipped");
+                continue;
+            }
+            glm::vec3 color{0.0f};
+            for (int c = 0; c < 3; ++c)
+            {
+                color[c] = static_cast<float>(
+                    std::clamp(ParseNumber(channels[static_cast<size_t>(c)]).value_or(255.0), 0.0, 255.0) / 255.0);
+            }
+            comboColors.emplace_back(static_cast<int>(*index), color);
         }
         else if (section == "Events")
         {
@@ -433,6 +462,12 @@ Result<OsuStandardImportResult> ImportOsuStandard(std::string_view osuText)
     }
 
     chart.Difficulty.ApproachRate = approachRate.value_or(chart.Difficulty.OverallDifficulty);
+    std::stable_sort(comboColors.begin(), comboColors.end(),
+                     [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (const auto& [index, color] : comboColors)
+    {
+        chart.ComboColors.push_back(color);
+    }
     chart.Info.Metadata.DifficultyValue = chart.Difficulty.OverallDifficulty;
     chart.AudioLeadInUs = MsToUs(audioLeadInMs, 0);
     const int64_t offsetUs = formatVersion < OLD_FORMAT_VERSION ? OLD_FORMAT_OFFSET_US : 0;
@@ -526,6 +561,10 @@ Result<OsuStandardImportResult> ImportOsuStandard(std::string_view osuText)
         note.EndTime = note.Time;
         note.Position = object.Position;
         note.IsNewCombo = (object.Type & NEW_COMBO_BIT) != 0 || chart.Notes.empty() || isAfterSpinner;
+        if ((object.Type & NEW_COMBO_BIT) != 0)
+        {
+            note.ComboColorSkip = static_cast<uint32_t>((object.Type >> COLOR_SKIP_SHIFT) & COLOR_SKIP_MASK);
+        }
         isAfterSpinner = false;
 
         if ((object.Type & SLIDER_BIT) != 0 && !object.ControlPoints.empty())

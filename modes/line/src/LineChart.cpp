@@ -1,11 +1,13 @@
 #include "line/LineChart.h"
 
+#include <glm/common.hpp>
 #include <glm/geometric.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <format>
+#include <iterator>
 #include <numbers>
 #include <string>
 #include <utility>
@@ -167,16 +169,24 @@ float GetKeyValue(const std::vector<LineKey>& keys, SongTimeUs time, float fallb
     return from.Value + ((to.Value - from.Value) * t);
 }
 
-LineState GetLineState(const JudgeLine& line, SongTimeUs time)
+LineState GetLineState(const JudgeLine& line, SongTimeUs time, glm::vec2 fieldSize)
 {
     LineState state;
-    state.Position = {GetKeyValue(line.X, time, DEFAULT_LINE_X) * FIELD_WIDTH,
-                      (1.0f - GetKeyValue(line.Y, time, DEFAULT_LINE_Y)) * FIELD_HEIGHT};
+    state.Position = {GetKeyValue(line.X, time, DEFAULT_LINE_X) * fieldSize.x,
+                      (1.0f - GetKeyValue(line.Y, time, DEFAULT_LINE_Y)) * fieldSize.y};
     // Counterclockwise degrees in the chart; clockwise radians on screen, y down.
     state.Angle = -GetKeyValue(line.Rotation, time, 0.0f) * std::numbers::pi_v<float> / 180.0f;
     state.Along = {std::cos(state.Angle), std::sin(state.Angle)};
     state.Up = {std::sin(state.Angle), -std::cos(state.Angle)};
     state.Opacity = std::clamp(GetKeyValue(line.Opacity, time, 1.0f), 0.0f, 1.0f);
+    state.Length = std::max(GetKeyValue(line.Length, time, 1.0f), 0.0f);
+    state.Thickness = std::max(GetKeyValue(line.Thickness, time, 1.0f), 0.0f);
+    if (!line.Red.empty() || !line.Green.empty() || !line.Blue.empty())
+    {
+        state.Color = glm::clamp(glm::vec3{GetKeyValue(line.Red, time, 1.0f), GetKeyValue(line.Green, time, 1.0f),
+                                           GetKeyValue(line.Blue, time, 1.0f)},
+                                 0.0f, 1.0f);
+    }
     return state;
 }
 
@@ -202,7 +212,7 @@ float GetNoteDistance(const LineChart& chart, const LineNote& note, SongTimeUs t
 glm::vec2 GetNotePosition(const LineChart& chart, const LineNote& note, SongTimeUs time, bool isEnd)
 {
     const JudgeLine& line = chart.Lines[note.Line];
-    const LineState state = GetLineState(line, time);
+    const LineState state = GetLineState(line, time, chart.FieldSize);
     const double floor = GetFloorPosition(line, time);
     const double target = isEnd ? note.EndFloorPosition : note.FloorPosition;
     const float distance = static_cast<float>((target - floor) * note.Speed) * DISTANCE_UNIT;
@@ -263,9 +273,42 @@ Result<LineChart> BuildLineChart(rhythm::Chart chart, std::vector<JudgeLine> lin
         note.EndFloorPosition = GetFloorPosition(line, note.EndTime);
         result.Notes.push_back(note);
     }
+    rhythm::MarkSimultaneous(result.Notes);
     chart.Notes.clear();
     result.Info = std::move(chart);
     return result;
+}
+
+std::vector<PictureUse> GetPictureUses(const LineChart& chart)
+{
+    std::vector<PictureUse> uses;
+    for (const JudgeLine& line : chart.Lines)
+    {
+        if (line.Picture.empty())
+        {
+            continue;
+        }
+        auto use =
+            std::find_if(uses.begin(), uses.end(), [&line](const PictureUse& u) { return u.Name == line.Picture; });
+        if (use == uses.end())
+        {
+            uses.push_back({line.Picture, glm::vec2{0.0f}});
+            use = std::prev(uses.end());
+        }
+        // Without keys, a pixel is a field unit.
+        const auto largest = [](const std::vector<LineKey>& keys)
+        {
+            float most = keys.empty() ? 1.0f : 0.0f;
+            for (const LineKey& key : keys)
+            {
+                most = std::max(most, std::abs(key.Value));
+            }
+            return most;
+        };
+        use->MaxUnitsPerPixel =
+            glm::max(use->MaxUnitsPerPixel, glm::vec2{largest(line.Length), largest(line.Thickness)});
+    }
+    return uses;
 }
 
 rhythm::ChartModeFormat MakeLineFormat(std::vector<JudgeLine>& lines, std::vector<LineNote>& notes)
@@ -283,13 +326,27 @@ rhythm::ChartModeFormat MakeLineFormat(std::vector<JudgeLine>& lines, std::vecto
                                                   {"y", &line.Y},
                                                   {"rotation", &line.Rotation},
                                                   {"opacity", &line.Opacity},
-                                                  {"speed", &line.Speed}})
+                                                  {"speed", &line.Speed},
+                                                  {"length", &line.Length},
+                                                  {"thickness", &line.Thickness},
+                                                  {"red", &line.Red},
+                                                  {"green", &line.Green},
+                                                  {"blue", &line.Blue}})
                 {
                     if (Result<void> result = ReadKeys(fields, key, *target); !result)
                     {
                         return Error{"'" + std::string(key) + "': " + result.GetError().Message};
                     }
                 }
+                Result<std::string> picture = fields.GetString("picture", "");
+                Result<double> anchorX = fields.GetNumber("anchorX", 0.5);
+                Result<double> anchorY = fields.GetNumber("anchorY", 0.5);
+                if (!picture || !anchorX || !anchorY)
+                {
+                    return !picture ? picture.GetError() : (!anchorX ? anchorX.GetError() : anchorY.GetError());
+                }
+                line.Picture = std::move(picture).Value();
+                line.Anchor = {static_cast<float>(anchorX.Value()), static_cast<float>(anchorY.Value())};
                 lines.push_back(std::move(line));
                 return {};
             });
@@ -340,9 +397,20 @@ rhythm::ChartModeFormat MakeLineFormat(std::vector<JudgeLine>& lines, std::vecto
                                       {"y", &line.Y},
                                       {"rotation", &line.Rotation},
                                       {"opacity", &line.Opacity},
-                                      {"speed", &line.Speed}})
+                                      {"speed", &line.Speed},
+                                      {"length", &line.Length},
+                                      {"thickness", &line.Thickness},
+                                      {"red", &line.Red},
+                                      {"green", &line.Green},
+                                      {"blue", &line.Blue}})
                                 {
                                     WriteKeys(fields, key, *source);
+                                }
+                                if (!line.Picture.empty())
+                                {
+                                    fields.AddString("picture", line.Picture);
+                                    fields.AddNumber("anchorX", ToShortest(line.Anchor.x));
+                                    fields.AddNumber("anchorY", ToShortest(line.Anchor.y));
                                 }
                             });
     };

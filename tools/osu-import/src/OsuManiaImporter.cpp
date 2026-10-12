@@ -197,6 +197,10 @@ Result<OsuImportResult> ImportOsuMania(std::string_view osuText)
                     keyCount = static_cast<int>(std::lround(*keys));
                 }
             }
+            else if (key == "OverallDifficulty")
+            {
+                chart.Metadata.OverallDifficulty = ParseNumber(value);
+            }
         }
         else if (section == "TimingPoints")
         {

@@ -66,11 +66,6 @@ constexpr size_t AlignUp4(size_t size)
 
 } // namespace
 
-std::unique_ptr<IRenderDevice> CreateRenderDevice()
-{
-    return std::make_unique<WebGpuRenderDevice>();
-}
-
 // --- WebGpuCommandList ---
 
 void WebGpuCommandList::Reset(WGPUCommandEncoder newEncoder)

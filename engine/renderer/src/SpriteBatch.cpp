@@ -2,11 +2,15 @@
 
 #if defined(__EMSCRIPTEN__)
 #include "Sprite.wgsl.h"
+#include "SpriteGles.h"
 #else
 #include "Sprite.spv.h"
 #endif
 
 #include "core/Log.h"
+
+#include <glm/common.hpp>
+#include <glm/geometric.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -42,6 +46,8 @@ Result<void> SpriteBatch::Initialize(rhi::IRenderDevice& renderDevice)
     rhi::PipelineDesc pipelineDesc;
 #if defined(__EMSCRIPTEN__)
     pipelineDesc.Wgsl = SPRITE_WGSL;
+    pipelineDesc.GlesVertex = SPRITE_GLES_VERTEX;
+    pipelineDesc.GlesFragment = SPRITE_GLES_FRAGMENT;
 #else
     pipelineDesc.Spirv = SPRITE_SPIRV;
 #endif
@@ -56,6 +62,7 @@ Result<void> SpriteBatch::Initialize(rhi::IRenderDevice& renderDevice)
         {2, 0, rhi::VertexFormat::Float4, static_cast<uint32_t>(offsetof(Instance, UvRect))},
         {3, 0, rhi::VertexFormat::UByte4Norm, static_cast<uint32_t>(offsetof(Instance, Color))},
         {4, 0, rhi::VertexFormat::UInt, static_cast<uint32_t>(offsetof(Instance, Flags))},
+        {5, 0, rhi::VertexFormat::Float4, static_cast<uint32_t>(offsetof(Instance, ClipRect))},
     };
     pipelineDesc.DebugName = "Sprite";
 
@@ -111,6 +118,8 @@ void SpriteBatch::Shutdown()
 void SpriteBatch::Begin(const Camera2D& camera)
 {
     clipTransform = camera.GetClipTransform();
+    opacity = 1.0f;
+    ClearClip();
     entries.clear();
     orderedLayers.clear();
 }
@@ -121,6 +130,33 @@ void SpriteBatch::KeepOrder(int32_t layer)
     {
         orderedLayers.push_back(layer);
     }
+}
+
+Color ToLightColor(glm::vec3 rgb, float minLuminance)
+{
+    rgb = glm::clamp(rgb, 0.0f, 1.0f);
+    const float luminance = glm::dot(rgb, glm::vec3{0.2126f, 0.7152f, 0.0722f});
+    if (luminance < minLuminance)
+    {
+        rgb = glm::mix(rgb, glm::vec3{1.0f}, (minLuminance - luminance) / (1.0f - luminance));
+    }
+    const auto channel = [](float value) { return static_cast<uint8_t>(std::lround(value * 255.0f)); };
+    return {channel(rgb.r), channel(rgb.g), channel(rgb.b), 255};
+}
+
+void SpriteBatch::SetOpacity(float value)
+{
+    opacity = std::clamp(value, 0.0f, 1.0f);
+}
+
+void SpriteBatch::SetClip(glm::vec2 min, glm::vec2 max)
+{
+    clip = {min, max};
+}
+
+void SpriteBatch::ClearClip()
+{
+    clip = {-NO_CLIP, -NO_CLIP, NO_CLIP, NO_CLIP};
 }
 
 void SpriteBatch::Draw(const Sprite& sprite)
@@ -143,8 +179,9 @@ void SpriteBatch::Draw(const Sprite& sprite)
     entry.Data = {{topLeft, topRight},
                   {bottomLeft, bottomRight},
                   sprite.UvRect,
-                  PackColor(sprite.Tint),
-                  sprite.IsDistanceField ? 1u : 0u};
+                  PackColor(WithAlpha(sprite.Tint, opacity)),
+                  sprite.IsDistanceField ? 1u : 0u,
+                  clip};
     entries.push_back(entry);
 }
 
@@ -155,7 +192,45 @@ void SpriteBatch::DrawQuad(glm::vec2 topLeft, glm::vec2 topRight, glm::vec2 bott
     entry.Layer = layer;
     entry.Texture = whiteTexture;
     entry.TextureKey = 0;
-    entry.Data = {{topLeft, topRight}, {bottomLeft, bottomRight}, {0.0f, 0.0f, 1.0f, 1.0f}, PackColor(color), 0u};
+    entry.Data = {{topLeft, topRight},
+                  {bottomLeft, bottomRight},
+                  {0.0f, 0.0f, 1.0f, 1.0f},
+                  PackColor(WithAlpha(color, opacity)),
+                  0u,
+                  clip};
+    entries.push_back(entry);
+}
+
+void SpriteBatch::DrawTriangle(glm::vec2 a, glm::vec2 b, glm::vec2 c, Color color, int32_t layer)
+{
+    // A quad with its bottom corners together: the half from top right to bottom left is empty.
+    DrawQuad(a, b, c, c, color, layer);
+}
+
+void SpriteBatch::DrawTriangle(glm::vec2 a, glm::vec2 b, glm::vec2 c, rhi::TextureHandle texture, glm::vec2 imageMin,
+                               glm::vec2 imageMax, Color tint, int32_t layer)
+{
+    if (!texture.IsValid() || imageMax.x == imageMin.x || imageMax.y == imageMin.y)
+    {
+        DrawTriangle(a, b, c, tint, layer);
+        return;
+    }
+    Entry entry;
+    entry.Layer = layer;
+    entry.Texture = texture;
+    entry.TextureKey = 0;
+    entry.Data = {{a, b}, {c, c}, {imageMin, imageMax}, PackColor(WithAlpha(tint, opacity)), 2u, clip};
+    entries.push_back(entry);
+}
+
+void SpriteBatch::DrawTriangleGlow(glm::vec2 a, glm::vec2 b, glm::vec2 c, Color color, float width, float inner,
+                                   int32_t layer)
+{
+    Entry entry;
+    entry.Layer = layer;
+    entry.Texture = whiteTexture;
+    entry.TextureKey = 0;
+    entry.Data = {{a, b}, {c, c}, {width, inner, 0.0f, 0.0f}, PackColor(WithAlpha(color, opacity)), 4u, clip};
     entries.push_back(entry);
 }
 

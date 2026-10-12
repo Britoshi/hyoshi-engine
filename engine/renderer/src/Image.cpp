@@ -1,6 +1,7 @@
 #include "renderer/Image.h"
 
 #include <stb_image.h>
+#include <stb_image_resize2.h>
 
 #include <algorithm>
 #include <cmath>
@@ -194,6 +195,39 @@ Result<Image> DecodeImage(std::span<const std::byte> data)
     image.Pixels.assign(pixels, pixels + (static_cast<size_t>(width) * static_cast<size_t>(height) * 4));
     stbi_image_free(pixels);
     return image;
+}
+
+Result<std::array<uint32_t, 2>> ReadImageSize(std::span<const std::byte> data)
+{
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    if (stbi_info_from_memory(reinterpret_cast<const stbi_uc*>(data.data()), static_cast<int>(data.size()), &width,
+                              &height, &channels) == 0)
+    {
+        return Error{std::string("Could not read the image's size: ") + stbi_failure_reason()};
+    }
+    return std::array<uint32_t, 2>{static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
+}
+
+Image ResizeImage(const Image& image, uint32_t width, uint32_t height)
+{
+    width = std::clamp<uint32_t>(width, 1, std::max<uint32_t>(image.Width, 1));
+    height = std::clamp<uint32_t>(height, 1, std::max<uint32_t>(image.Height, 1));
+    if (image.IsEmpty() || image.Channels != 4 || (width == image.Width && height == image.Height))
+    {
+        return image;
+    }
+    Image resized;
+    resized.Width = width;
+    resized.Height = height;
+    resized.Channels = 4;
+    resized.Pixels.resize(static_cast<size_t>(width) * height * 4);
+    // STBIR_RGBA: straight alpha, which the resizer weighs color by.
+    stbir_resize_uint8_linear(image.Pixels.data(), static_cast<int>(image.Width), static_cast<int>(image.Height),
+                              static_cast<int>(image.Width * 4), resized.Pixels.data(), static_cast<int>(width),
+                              static_cast<int>(height), static_cast<int>(width * 4), STBIR_RGBA);
+    return resized;
 }
 
 Image MakeDistanceField(const Image& image, uint32_t maxSize, uint32_t spread, float speckFraction)

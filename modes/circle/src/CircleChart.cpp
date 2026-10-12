@@ -233,10 +233,18 @@ void ComputePaths(CircleChart& chart)
 void ComputeComboNumbers(CircleChart& chart)
 {
     uint32_t number = 0;
+    uint32_t color = 0;
+    bool isFirst = true;
     for (CircleNote& note : chart.Notes)
     {
         number = note.IsNewCombo ? 1 : number + 1;
         note.ComboNumber = number;
+        if (note.IsNewCombo && !isFirst)
+        {
+            color += 1 + note.ComboColorSkip;
+        }
+        isFirst = false;
+        note.ComboColor = color;
     }
 }
 
@@ -480,6 +488,7 @@ SongTimeUs CircleChart::GetEndTime() const
 
 void FinishCircleChart(CircleChart& chart)
 {
+    rhythm::MarkSimultaneous(chart.Notes);
     ComputeComboNumbers(chart);
     ComputePaths(chart);
     ComputeSliderParts(chart);

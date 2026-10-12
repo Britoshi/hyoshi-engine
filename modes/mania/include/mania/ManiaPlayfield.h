@@ -9,6 +9,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace hyoshi::mania
 {
@@ -27,14 +28,23 @@ struct PlayfieldStyle
 {
     PlayfieldView View = PlayfieldView::Flat;
     float LaneWidth = 120.0f;
+    // Canvas units on flat lanes; on the track, as long in time as that (the track stretches with
+    // its length, like the scroll).
     float NoteHeight = 34.0f;
     // Distance from the bottom of the canvas to the judgment line.
     float JudgeLineFromBottom = 190.0f;
-    // Virtual units per second of scroll at 1x.
+    // Canvas units per second of scroll at 1x, on flat lanes. The track covers the same time from its
+    // far end as flat lanes do from the canvas's top.
     float ScrollSpeed = 1500.0f;
     // Where the lanes' middle is across the canvas (and a track's vanishing point); negative for
     // the canvas's middle.
     float CenterX = -1.0f;
+    // How early or late the timing meter's ends are: the judge's widest window.
+    int64_t ErrorMeterRangeUs = rhythm::HitWindows{}.BadUs;
+    // The lanes' colors, mirrored from the outside in (the outer lanes take the first), with the
+    // track's edges in the first: a map's own colors. Empty for the usual white and blue, with a
+    // gold middle lane.
+    std::vector<renderer::Color> LaneColors;
 };
 
 // Draws a Mania playfield with SpriteBatch, flat or as a track in perspective (PlayfieldView): lanes,
@@ -46,6 +56,10 @@ class ManiaPlayfield
 {
 public:
     void Reset(uint32_t laneCount);
+
+    // How many times its width at the judgment line the track is at canvas height `y` (Track
+    // view): more below the line, less toward the far end.
+    static float GetTrackScaleAt(glm::vec2 canvas, const PlayfieldStyle& style, float y);
 
     // Call for every judgment event, for the feedback effects.
     void OnJudgment(const rhythm::JudgmentEvent& event, uint32_t lane);

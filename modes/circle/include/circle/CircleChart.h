@@ -6,6 +6,7 @@
 #include "core/Time.h"
 
 #include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -145,6 +146,9 @@ struct CircleNote
     NoteType Type = NoteType::Circle;
     // Starts a new combo, whose numbers count from 1.
     bool IsNewCombo = false;
+    // A new combo's color moves on this many more of CircleChart::ComboColors than the usual one
+    // (osu!'s "colour skip", 0 to 7).
+    uint32_t ComboColorSkip = 0;
 
     // Sliders: the path as authored (the head first) and how far along it the slider goes, which
     // with the tempo and slider velocity sets its duration.
@@ -169,6 +173,11 @@ struct CircleNote
     uint32_t PartCount = 0;
     // The number drawn on it, counting from 1 within its combo.
     uint32_t ComboNumber = 1;
+    // Its combo's color in CircleChart::ComboColors (modulo their count): the first combo takes the
+    // first, and each new one the next, past its skip.
+    uint32_t ComboColor = 0;
+    // Due together with another note (rhythm::MarkSimultaneous), so it shines.
+    bool IsSimultaneous = false;
     // Sliders: the path sampled at even spacing along its length, in CircleChart::Path.
     uint32_t FirstPathPoint = 0;
     uint32_t PathPointCount = 0;
@@ -220,6 +229,9 @@ struct CircleChart
     CircleDifficulty Difficulty;
     // The background image, relative to the chart file, or empty.
     std::string BackgroundFile;
+    // The map's combo colors (osu!'s [Colours] Combo1 on), each channel 0 to 1, taken in turn by its
+    // combos; empty for the playfield's own.
+    std::vector<glm::vec3> ComboColors;
     // Silence the chart asks for before the audio starts.
     SongTimeUs AudioLeadInUs = 0;
     // Sorted by time.

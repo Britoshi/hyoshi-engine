@@ -89,9 +89,14 @@ void ArcaeaJudge::Reset(const ManiaChart& maniaChart, const ArcaeaWindows& arcae
             tick.CheckTime = k == 0 ? tick.Time + windows.FarUs : tick.Time;
             tick.Note = i;
             tick.IsFirst = k == 0;
-            tick.IsLast = k + 1 == combos.Count;
             ticks.push_back(tick);
         }
+        Tick end;
+        end.Time = note.EndTime;
+        end.CheckTime = std::max(note.EndTime, note.Time + windows.FarUs);
+        end.Note = i;
+        end.IsEnd = true;
+        ticks.push_back(end);
     }
     std::stable_sort(ticks.begin(), ticks.end(),
                      [](const Tick& a, const Tick& b) { return a.CheckTime < b.CheckTime; });
@@ -136,6 +141,11 @@ void ArcaeaJudge::Advance(SongTimeUs target, std::vector<rhythm::JudgmentEvent>&
         }
         const Tick tick = ticks[nextTick++];
         time = std::max(time, tick.CheckTime);
+        if (tick.IsEnd)
+        {
+            Finish(tick.Note, holdHit[tick.Note] ? NoteState::Hit : NoteState::Missed);
+            continue;
+        }
         const Lane& lane = lanes[chart->Notes[tick.Note].Lane];
         // The first combo also takes a press within Far of the start.
         const bool isHeld = lane.IsHeld || (tick.IsFirst && lane.LastPress != INT64_MIN &&
@@ -145,10 +155,6 @@ void ArcaeaJudge::Advance(SongTimeUs target, std::vector<rhythm::JudgmentEvent>&
         event.IsTimed = false;
         events.push_back(event);
         holdHit[tick.Note] = holdHit[tick.Note] || isHeld;
-        if (tick.IsLast)
-        {
-            Finish(tick.Note, holdHit[tick.Note] ? NoteState::Hit : NoteState::Missed);
-        }
     }
     time = target;
 }
@@ -167,6 +173,10 @@ void ArcaeaJudge::ProcessAction(const rhythm::GameplayAction& action, std::vecto
         return;
     }
     lane.IsHeld = true;
+    if (action.Type == static_cast<uint16_t>(ManiaAction::Touch))
+    {
+        return;
+    }
     lane.LastPress = time;
     if (const std::optional<uint32_t> note = FindTap(action.Index, time))
     {

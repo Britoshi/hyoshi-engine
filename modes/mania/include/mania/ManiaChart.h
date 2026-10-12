@@ -29,6 +29,8 @@ struct ManiaNote
     uint32_t SampleVolume = 100;
     double ScrollPosition = 0.0;
     double EndScrollPosition = 0.0;
+    // Due together with another note (a chord: rhythm::MarkSimultaneous), so it shines.
+    bool IsSimultaneous = false;
 
     bool IsHold() const
     {

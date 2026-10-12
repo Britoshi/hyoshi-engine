@@ -173,6 +173,11 @@ struct PipelineDesc
     std::span<const uint32_t> Spirv;
     // The same as WGSL, for WebGPU (web builds).
     std::string_view Wgsl;
+    // The same as GLSL ES 3.00 vertex and fragment shaders, for WebGL 2 (web builds where WebGPU
+    // isn't available): the push constants are a std140 uniform block named Constants, and texture
+    // slot N the sampler2D textureN. Written by hand from the Slang source.
+    std::string_view GlesVertex;
+    std::string_view GlesFragment;
     const char* VertexEntry = "vertexMain";
     const char* FragmentEntry = "fragmentMain";
 

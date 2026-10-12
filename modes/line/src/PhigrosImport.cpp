@@ -110,11 +110,18 @@ Result<PhigrosImportResult> ImportPhigros(std::string_view json)
     };
     std::vector<Imported> notes;
     size_t unknownNotes = 0;
+    bool isRpe = false;
 
     Result<void> read = rhythm::ReadJson(
         json,
         [&](const rhythm::ChartFields& root) -> Result<void>
         {
+            // Re:PhiEdit's format has a global BPM list and its META.
+            if (root.Has("BPMList") || root.Has("META"))
+            {
+                isRpe = true;
+                return {};
+            }
             Result<int64_t> version = root.GetInt("formatVersion", 3);
             Result<double> offset = root.GetNumber("offset", 0.0);
             if (!version || !offset)
@@ -276,6 +283,10 @@ Result<PhigrosImportResult> ImportPhigros(std::string_view json)
     if (!read)
     {
         return read.GetError();
+    }
+    if (isRpe)
+    {
+        return ImportRpe(json);
     }
     if (lines.empty())
     {

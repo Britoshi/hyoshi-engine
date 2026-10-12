@@ -3,6 +3,7 @@
 #include "core/Result.h"
 #include "rhi/IRenderDevice.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -25,8 +26,16 @@ struct Image
     }
 };
 
-// Decodes a PNG or JPEG file's contents to RGBA8.
+// Decodes a PNG, JPEG, or GIF (its first frame) file's contents to RGBA8.
 Result<Image> DecodeImage(std::span<const std::byte> data);
+
+// The width and height an image file's header gives, without decoding it.
+Result<std::array<uint32_t, 2>> ReadImageSize(std::span<const std::byte> data);
+
+// An RGBA8 image scaled down to width x height (each side on its own; neither grows), filtered,
+// with color weighted by alpha so transparent pixels don't darken edges. Other images come back
+// as they are.
+Image ResizeImage(const Image& image, uint32_t width, uint32_t height);
 
 // A single-channel signed distance field of an RGBA image's alpha, for drawing one-color artwork
 // (logos, icons) crisply at any size as a distance field sprite, tinted any color. Transparent

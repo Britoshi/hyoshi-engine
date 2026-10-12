@@ -199,6 +199,9 @@ private:
     VkRenderPass swapchainRenderPass = VK_NULL_HANDLE;
     VkFormat renderPassFormat = VK_FORMAT_UNDEFINED;
     bool isSwapchainDirty = false;
+    // The window under the surface is gone (Android's, in the background): the surface goes, and the
+    // app makes a new one (CreateSurface).
+    bool isSurfaceLost = false;
     PresentMode preferredPresentMode = PresentMode::Fifo;
 
     std::array<FrameData, FRAMES_IN_FLIGHT> frames{};
