@@ -29,6 +29,7 @@ target_link_libraries(hyoshi_unit_tests PRIVATE hyoshi::core hyoshi::input hyosh
     doctest::doctest hyoshi_stb miniz)
 list(GET HYOSHI_FONT_FILES 0 testFont)
 target_compile_definitions(hyoshi_unit_tests PRIVATE HYOSHI_REPLAY_DIR="${PROJECT_SOURCE_DIR}/tests/replays"
+    HYOSHI_TEST_AUDIO_DIR="${PROJECT_SOURCE_DIR}/tests/audio"
     HYOSHI_TEST_FONT="${testFont}")
 hyoshi_set_warnings(hyoshi_unit_tests)
 hyoshi_configure_executable(hyoshi_unit_tests)

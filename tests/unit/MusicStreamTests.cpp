@@ -34,7 +34,8 @@ int16_t RampValue(DspFrame frame)
 }
 
 // A file whose frames are RampValue. It can end before its stated length, as a truncated file does.
-// Without exact seeks, a seek anywhere but the start lands 1000 frames late, as MP3 seeks miss.
+// Without exact seeks, a seek anywhere but the start lands 1000 frames late, as miniaudio's MP3
+// seeks missed.
 class RampDecoder final : public IStreamDecoder
 {
 public:

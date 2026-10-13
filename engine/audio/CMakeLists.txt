@@ -4,6 +4,7 @@ add_library(hyoshi_audio STATIC
     src/Synth.cpp
     miniaudio/MiniaudioBackend.cpp
     miniaudio/MiniaudioDecoder.cpp
+    miniaudio/Mp3Backend.cpp
     miniaudio/ThirdPartyImplementations.cpp
 )
 add_library(hyoshi::audio ALIAS hyoshi_audio)

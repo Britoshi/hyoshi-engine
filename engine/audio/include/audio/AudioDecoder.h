@@ -39,8 +39,8 @@ public:
     virtual bool Seek(DspFrame frame) = 0;
 };
 
-// Opens WAV, MP3, FLAC, or Ogg Vorbis for streaming at sampleRate. Fast: it reads the headers.
-// MP3s don't have exact seeks: miniaudio's land up to 26 ms off.
+// Opens WAV, MP3, FLAC, or Ogg Vorbis for streaming at sampleRate. Fast: it reads the headers. Each
+// has exact seeks; MP3's are the engine's own, as miniaudio's miss.
 Result<std::unique_ptr<IStreamDecoder>> OpenStreamDecoder(std::vector<std::byte> encoded, uint32_t sampleRate);
 
 } // namespace hyoshi::audio

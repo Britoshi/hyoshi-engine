@@ -7,7 +7,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace
@@ -44,6 +47,17 @@ std::vector<std::byte> MakeWav(const std::vector<int16_t>& samples, uint16_t cha
     AppendValue<uint32_t>(bytes, dataSize);
     Append(bytes, samples.data(), dataSize);
     return bytes;
+}
+
+// tests/audio's MP3s are 3 s of pink noise then a 3 s sine sweep (sox), mono, 44.1 kHz, made by LAME
+// at 64 kbps, which leans on the bit reservoir: noise-sweep.mp3 has LAME's tag giving the encoder
+// delay, noise-sweep-untagged.mp3 doesn't (-t).
+std::vector<std::byte> ReadTestAudio(const std::string& name)
+{
+    std::ifstream file(std::string(HYOSHI_TEST_AUDIO_DIR) + "/" + name, std::ios::binary);
+    const std::vector<char> bytes{std::istreambuf_iterator<char>(file), {}};
+    const auto* begin = reinterpret_cast<const std::byte*>(bytes.data());
+    return {begin, begin + bytes.size()};
 }
 
 } // namespace
@@ -122,6 +136,39 @@ TEST_CASE("OpenStreamDecoder knows a resampled file's length")
         hyoshi::audio::OpenStreamDecoder(wav, 48'000);
     REQUIRE(opened);
     CHECK(opened.Value()->GetFrameCount() == doctest::Approx(48'000).epsilon(0.001));
+}
+
+TEST_CASE("OpenStreamDecoder seeks an MP3 to the frame decoding from the start reaches")
+{
+    for (const std::string name : {"noise-sweep.mp3", "noise-sweep-untagged.mp3"})
+    {
+        CAPTURE(name);
+        const std::vector<std::byte> mp3 = ReadTestAudio(name);
+        // At the file's own rate, so the samples are the same.
+        hyoshi::Result<hyoshi::audio::PcmBuffer> whole = hyoshi::audio::DecodeAudio(mp3, 44'100);
+        REQUIRE(whole);
+        const std::vector<int16_t>& samples = whole.Value().Samples;
+
+        hyoshi::Result<std::unique_ptr<hyoshi::audio::IStreamDecoder>> opened =
+            hyoshi::audio::OpenStreamDecoder(mp3, 44'100);
+        REQUIRE(opened);
+        hyoshi::audio::IStreamDecoder& decoder = *opened.Value();
+        CHECK(decoder.HasExactSeeks());
+        CHECK(decoder.GetFrameCount() == whole.Value().GetFrameCount());
+
+        // Within the first frames (decoded from the start), on an MP3 frame's edge, mid-frame, in the
+        // sweep, back again, and near the end.
+        for (const hyoshi::DspFrame frame :
+             {hyoshi::DspFrame{700}, hyoshi::DspFrame{1'152 * 40}, hyoshi::DspFrame{100'003}, hyoshi::DspFrame{200'000},
+              hyoshi::DspFrame{12'345}, whole.Value().GetFrameCount() - 3'000})
+        {
+            CAPTURE(frame);
+            REQUIRE(decoder.Seek(frame));
+            std::vector<int16_t> read(size_t{2'000} * 2);
+            REQUIRE(decoder.Read(read.data(), 2'000) == 2'000);
+            CHECK(std::equal(read.begin(), read.end(), samples.begin() + static_cast<std::ptrdiff_t>(frame * 2)));
+        }
+    }
 }
 
 TEST_CASE("OpenStreamDecoder rejects data that isn't audio")

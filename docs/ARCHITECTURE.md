@@ -52,7 +52,7 @@ The layer draws the menu bar (File, with the game's items above Quit; View; then
 
 ## How music is loaded
 
-`SongPlayer::LoadFile` reads the file and opens a `MusicStream` on a worker, which takes a few milliseconds: the stream reads the headers and knows the length. The stream's thread then decodes about 1.4 s ahead in fixed blocks, which pass to the audio thread and back through lock-free queues. A seek starts a new epoch: the mixer drops blocks decoded for the old position, and until the first block for the new one arrives, it holds the music and reports it as not playing, which the song clock treats as a pause. Seeks land on the frame that decoding from the start reaches; MP3s get there by decoding, since miniaudio's MP3 seeks miss by up to 26 ms (DESIGN.md section 11.2). Sounds, and music generated in memory (`SongPlayer::Load`), are decoded whole instead.
+`SongPlayer::LoadFile` reads the file and opens a `MusicStream` on a worker, which takes a few milliseconds: the stream reads the headers and knows the length. The stream's thread then decodes about 1.4 s ahead in fixed blocks, which pass to the audio thread and back through lock-free queues. A seek starts a new epoch: the mixer drops blocks decoded for the old position, and until the first block for the new one arrives, it holds the music and reports it as not playing, which the song clock treats as a pause. Seeks land on the frame that decoding from the start reaches, MP3s' through the engine's own backend, since miniaudio's MP3 seeks miss (DESIGN.md section 11.2). Sounds, and music generated in memory (`SongPlayer::Load`), are decoded whole instead.
 
 ## How time flows
 

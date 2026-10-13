@@ -1,5 +1,7 @@
 #include "audio/AudioDecoder.h"
 
+#include "Mp3Backend.h"
+
 #include <miniaudio.h>
 
 #include <array>
@@ -19,10 +21,9 @@ namespace
 
 constexpr ma_uint64 DECODE_CHUNK_FRAMES = 4096;
 
-// Whether miniaudio seeks this file to the exact frame sequential decoding reaches: WAV, AIFF,
-// FLAC, and Ogg Vorbis. MP3 seeks don't (dr_mp3 counts seek positions without the encoder delay,
-// and a seek-table seek also skips a frame: up to 26 ms off), so anything else is treated as
-// having inexact seeks.
+// Whether miniaudio's own decoding seeks this file to the exact frame sequential decoding reaches:
+// WAV, AIFF, FLAC, and Ogg Vorbis. Its MP3 seeks don't, so anything else is offered the exact MP3
+// backend first.
 bool IsExactSeekFormat(std::span<const std::byte> encoded)
 {
     if (encoded.size() < 4)
@@ -56,14 +57,22 @@ public:
     // place.
     Result<void> Open(uint32_t sampleRate)
     {
-        hasExactSeeks = IsExactSeekFormat(encoded);
-        const ma_decoder_config config = ma_decoder_config_init(ma_format_s16, PcmBuffer::CHANNELS, sampleRate);
+        ma_decoder_config config = ma_decoder_config_init(ma_format_s16, PcmBuffer::CHANNELS, sampleRate);
+        // miniaudio tries custom backends first, then its own.
+        std::array<ma_decoding_backend_vtable*, 1> mp3Backend{GetExactMp3Backend()};
+        const bool isBuiltInExact = IsExactSeekFormat(encoded);
+        if (!isBuiltInExact)
+        {
+            config.ppCustomBackendVTables = mp3Backend.data();
+            config.customBackendCount = static_cast<ma_uint32>(mp3Backend.size());
+        }
         if (const ma_result result = ma_decoder_init_memory(encoded.data(), encoded.size(), &config, &decoder);
             result != MA_SUCCESS)
         {
             return Error{std::string("Unsupported or corrupt audio: ") + ma_result_description(result)};
         }
         isOpen = true;
+        hasExactSeeks = isBuiltInExact || decoder.pBackendVTable == GetExactMp3Backend();
 
         ma_uint64 length = 0;
         if (ma_decoder_get_length_in_pcm_frames(&decoder, &length) != MA_SUCCESS || length == 0)

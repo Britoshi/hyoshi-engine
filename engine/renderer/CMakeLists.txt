@@ -14,4 +14,10 @@ hyoshi_add_shaders(hyoshi_renderer
     ${PROJECT_SOURCE_DIR}/shaders/Sprite.slang
 )
 
+# stb's decoding and resizing are optimized in debug builds too (see ThirdPartyImplementations.cpp,
+# which does it for MSVC): unoptimized, a song's picture takes up to half a second to resize.
+if(NOT MSVC)
+    set_source_files_properties(src/ThirdPartyImplementations.cpp PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O2>")
+endif()
+
 hyoshi_set_warnings(hyoshi_renderer)
