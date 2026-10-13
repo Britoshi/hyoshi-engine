@@ -56,13 +56,17 @@ struct CirclePlayfieldStyle
     float FollowPointThickness = 0.035f;
     // The result marks for a Great, a Good, and a Bad (a miss is an X).
     std::array<const char*, 3> MarkTexts{"300", "100", "50"};
+    // A chart editor's view: slider bodies whole from when they appear, rather than snaking in,
+    // so their shapes can be seen.
+    bool IsEditorView = false;
 };
 
 // Draws a circle chart with SpriteBatch (DESIGN.md section 16.4):
-// circles with combo numbers and shrinking approach circles; sliders that snake in, carry a ball
-// (in its follow circle while it's followed), and shrink behind it on their last pass, with reverse
-// arrows and ticks; follow points; a pop where a note or a slider's head is struck, and a mark
-// with its result; and spinners as a ring that empties over their length.
+// circles with combo numbers and shrinking approach circles (slides and flicks as diamonds, and
+// gliding notes along their paths); sliders that snake in, carry a ball (in its follow circle while
+// it's followed), and shrink behind it on their last pass, with reverse arrows and ticks; follow
+// points; a pop where a note or a slider's head is struck, and a mark with its result; and spinners
+// as a ring that empties over their length.
 //
 // Notes are drawn latest first, so the next note is always on top. Slider bodies go below every
 // circle. The playfield's shapes are generated at load, not skinned.
@@ -134,6 +138,8 @@ private:
     uint32_t firstNote = 0;
     size_t firstFollowPoint = 0;
     SongTimeUs lastTime = INT64_MIN;
+    // The longest any note shows before its time.
+    SongTimeUs longestLeadUs = 0;
 };
 
 } // namespace hyoshi::circle

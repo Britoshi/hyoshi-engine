@@ -21,6 +21,7 @@ enum class AudioCommandType : uint8_t
     PlayMusic,
     PauseMusic,
     SeekMusic,
+    SetMusicRate,
     PlayVoice,
     StopVoice,
     SetBusVolume,
@@ -41,6 +42,8 @@ struct AudioCommand
     MusicStream* Stream = nullptr;
     // SeekMusic on a stream: the epoch of the blocks decoded from the target (MusicStream).
     int64_t StreamEpoch = 0;
+    // SetMusicRate: music frames per frame rendered.
+    double Rate = 1.0;
 };
 
 // The engine's custom mixer (DESIGN.md section 11.2), independent of any device so it can run
@@ -51,10 +54,14 @@ struct AudioCommand
 // streams are owned by the main thread, which keeps them alive until CommandsApplied shows they are
 // released. Streamed music plays once its stream has decoded the blocks for the current position;
 // until then it holds where it is, and snapshots report it as not playing.
+//
+// At a rate other than 1, the music is resampled linearly, which shifts its pitch with its speed.
 class Mixer
 {
 public:
     static constexpr DspFrame NOT_SCHEDULED = -1;
+    static constexpr double MIN_MUSIC_RATE = 0.1;
+    static constexpr double MAX_MUSIC_RATE = 4.0;
 
     Mixer(uint32_t sampleRate, uint32_t voiceCount, size_t commandCapacity = 1024);
 
@@ -92,7 +99,11 @@ private:
     void Apply(const AudioCommand& command);
     void CancelScheduledVoices();
     DspFrame GetMusicFrameCount() const;
+    // The music frames that rendering frameCount frames would play.
+    DspFrame GetMusicFramesFor(DspFrame frameCount) const;
     DspFrame RenderMusic(float* output, DspFrame frameCount);
+    DspFrame RenderMusicAtRate(float* output, DspFrame frameCount);
+    void SetMusicCursor(DspFrame frame);
     float GetBusGain(Bus bus) const;
     static void MixInto(float* output, const int16_t* source, uint32_t frameCount, float gain);
 
@@ -106,6 +117,11 @@ private:
     const PcmBuffer* music = nullptr;
     MusicStream* stream = nullptr;
     DspFrame musicCursor = 0;
+    // At a rate other than 1: how far past musicCursor the music is, in [0, 1), and how many frames
+    // a stream still has to skip to reach musicCursor (stepped over at the end of its last block).
+    double musicRate = 1.0;
+    double musicPhase = 0.0;
+    DspFrame musicSkip = 0;
     bool isMusicPlaying = false;
     // The last callback advanced the music, with no seek, pause, or music change since.
     bool wasMusicAdvancing = false;

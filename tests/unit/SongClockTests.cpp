@@ -2,6 +2,7 @@
 
 #include <doctest/doctest.h>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 
@@ -29,6 +30,8 @@ struct FakeDevice
     int64_t Generation = 1;
     DspFrame MusicStartFrame = 0;
     HostTimeNs MusicStartHost = 0;
+    // Music frames per frame rendered.
+    double Rate = 1.0;
 
     HostTimeNs Jitter(int64_t callback) const
     {
@@ -53,18 +56,22 @@ struct FakeDevice
         AudioClockSnapshot snapshot;
         snapshot.SampleRate = RATE;
         snapshot.HostTime = callback == 0 ? MusicStartHost : start;
-        snapshot.MusicFrame = MusicStartFrame + (callback * PERIOD_FRAMES);
+        snapshot.MusicFrame = MusicStartFrame + std::llround(static_cast<double>(callback * PERIOD_FRAMES) * Rate);
         snapshot.DeviceFrames = snapshot.MusicFrame;
+        snapshot.MusicRate = Rate;
         snapshot.IsMusicPlaying = 1;
         snapshot.SeekGeneration = Generation;
         snapshot.CallbackFrames = PERIOD_FRAMES;
         return snapshot;
     }
 
-    // What is audible at `now`, in song time.
+    // What is audible at `now`, in song time: the latency is real time, so it covers Rate times as
+    // much of the music.
     SongTimeUs Truth(HostTimeNs now) const
     {
-        return hyoshi::FramesToUs(MusicStartFrame, RATE) + ((now - MusicStartHost) / hyoshi::NS_PER_US) - LATENCY_US;
+        const auto elapsedUs = static_cast<double>((now - MusicStartHost) / hyoshi::NS_PER_US);
+        return hyoshi::FramesToUs(MusicStartFrame, RATE) + std::llround(elapsedUs * Rate) -
+               std::llround(static_cast<double>(LATENCY_US) * Rate);
     }
 };
 
@@ -202,6 +209,37 @@ TEST_CASE("SongClock holds through a device stall without rewinding")
     CHECK(simulation.IsMonotonic);
     CHECK_FALSE(simulation.Clock.IsStalled());
     CHECK(simulation.ErrorAgainst(resumed) <= 1'000);
+}
+
+TEST_CASE("SongClock runs at the music's rate")
+{
+    FakeDevice device;
+    Simulation simulation;
+    simulation.RunFor(1'000 * NS_PER_MS, device);
+
+    // From the next callback on, the music plays at half speed.
+    FakeDevice slow = device;
+    slow.MusicStartFrame = device.Latest(simulation.Now).MusicFrame + PERIOD_FRAMES;
+    slow.MusicStartHost = simulation.Now;
+    slow.Rate = 0.5;
+    simulation.RunFor(500 * NS_PER_MS, slow);
+    CHECK(simulation.Clock.GetMusicRate() == 0.5);
+
+    simulation.IsMonotonic = true;
+    SongTimeUs worstError = 0;
+    for (int i = 0; i < 1'000; ++i)
+    {
+        simulation.RunFor(FRAME_NS, slow);
+        worstError = std::max(worstError, simulation.ErrorAgainst(slow));
+    }
+    CHECK(simulation.IsMonotonic);
+    CHECK(simulation.Clock.GetResyncCount() == 0);
+    CHECK(worstError <= 1'000);
+
+    // Input maps both ways, to the microsecond, and seeks put the music where song time says.
+    const SongTimeUs time = simulation.Clock.GetSongTime() + 12'345;
+    CHECK(std::abs(simulation.Clock.HostTimeToSongTime(simulation.Clock.SongTimeToHostTime(time)) - time) <= 1);
+    CHECK(simulation.Clock.SongTimeForMusicFrame(10 * RATE, RATE) == 10'000'000 - (LATENCY_US / 2));
 }
 
 TEST_CASE("SongClock re-anchors on a large jump without a seek")

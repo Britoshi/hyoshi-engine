@@ -59,6 +59,8 @@ struct AudioClockSnapshot
     int64_t CommandsApplied = 0;
     // Frames this callback renders.
     int64_t CallbackFrames = 0;
+    // Music frames played per frame rendered (IAudioBackend::SetMusicRate): 1 normally.
+    double MusicRate = 1.0;
 };
 
 struct AudioConfig

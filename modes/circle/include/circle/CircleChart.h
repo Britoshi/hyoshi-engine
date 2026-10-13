@@ -34,6 +34,12 @@ constexpr float FOLLOW_RADIUS_SCALE = 2.4f;
 // halfway through the slider if that's later.
 constexpr SongTimeUs TAIL_LENIENCE_US = 36'000;
 
+// A pointer's speed, for flicks, is how far it went over this long.
+constexpr SongTimeUs FLICK_SPEED_WINDOW_US = 50'000;
+
+// A gliding note's path has this many points.
+constexpr uint32_t GLIDE_PATH_POINTS = 64;
+
 enum class NoteType : uint8_t
 {
     // Struck once.
@@ -53,6 +59,20 @@ enum class CurveType : uint8_t
     Catmull,
     // A circular arc through exactly three points; anything else falls back to Bezier.
     PerfectCircle
+};
+
+// How a note's head is struck: a circle's, or a slider's.
+enum class HeadKind : uint8_t
+{
+    // Pressed where it is: a button, a key, or a finger landing. Graded by its timing.
+    Press,
+    // Touched: a pointer down on it from its time to the end of its window, however it got there
+    // (landing, sliding onto it, or resting there already). Always a Great: when a finger that was
+    // already there counts isn't the player's choice.
+    Slide,
+    // Swiped: a pointer crossing it at its speed (CircleNote::FlickSpeed) or faster within its
+    // window, down or not, in any direction. Always a Great.
+    Flick
 };
 
 // osu!'s sample banks: three sets of hit sounds.
@@ -149,6 +169,28 @@ struct CircleNote
     // A new combo's color moves on this many more of CircleChart::ComboColors than the usual one
     // (osu!'s "colour skip", 0 to 7).
     uint32_t ComboColorSkip = 0;
+    // How its head is struck, and a flick's speed in playfield widths per second (0 for the chart's,
+    // CircleDifficulty::FlickSpeed).
+    HeadKind Head = HeadKind::Press;
+    float FlickSpeed = 0.0f;
+
+    // Circles can glide in along a path, landing where they're struck at their time, instead of
+    // appearing there. Only the drawing changes: they're judged where they land. The path is in
+    // CircleChart::GlidePath (MakeGlidePath), from where the note comes in to Position; a note
+    // without one doesn't glide.
+    uint32_t FirstGlidePoint = 0;
+    uint32_t GlidePointCount = 0;
+    // When it sets off, and when it appears, waiting at the path's start until it sets off (so an
+    // approach circle that opens first has a note to ride). It fades in over GlideFadeUs from
+    // appearing, or not at all for 0.
+    SongTimeUs GlideStartTime = 0;
+    SongTimeUs GlideAppearTime = 0;
+    SongTimeUs GlideFadeUs = 0;
+
+    // Its approach circle: how long before its time it starts shrinking (0 for the approach time, or
+    // negative for none), and how long it fades in from then (0 for the first 40% of that).
+    SongTimeUs ApproachLeadUs = 0;
+    SongTimeUs ApproachFadeUs = 0;
 
     // Sliders: the path as authored (the head first) and how far along it the slider goes, which
     // with the tempo and slider velocity sets its duration.
@@ -189,6 +231,11 @@ struct CircleNote
     {
         return Position + StackOffset;
     }
+
+    bool IsGliding() const
+    {
+        return Type == NoteType::Circle && GlidePointCount >= 2;
+    }
 };
 
 // Half-widths of the hit windows, from OverallDifficulty.
@@ -214,6 +261,11 @@ struct CircleDifficulty
     double SliderTickRate = 1.0;
     // Notes closer in time than this fraction of the approach time can stack. 0 turns it off.
     float StackLeniency = 0.7f;
+    // Gliding notes stack too. Off by default: they come in from elsewhere, so they needn't be
+    // pulled apart, and a stack's offset would move their whole path.
+    bool AreGlidingNotesStacked = false;
+    // Flicks' speed, for those without their own: playfield widths per second.
+    float FlickSpeed = 2.0f;
 
     // A circle's radius in playfield units.
     float GetRadius() const;
@@ -238,6 +290,8 @@ struct CircleChart
     std::vector<CircleNote> Notes;
     std::vector<glm::vec2> ControlPoints;
     std::vector<glm::vec2> Path;
+    // Gliding notes' paths (CircleNote::FirstGlidePoint).
+    std::vector<glm::vec2> GlidePath;
     std::vector<HitSound> HitSounds;
     // Sorted by time. A note before the first takes the first; none at all is the normal bank at
     // full volume.
@@ -269,6 +323,26 @@ glm::vec2 GetPathPosition(const CircleChart& chart, const CircleNote& note, floa
 
 // Where the slider ball is at `time`, clamped to the slider's span.
 glm::vec2 GetBallPosition(const CircleChart& chart, const CircleNote& note, SongTimeUs time);
+
+// Where a note's head is struck, including its stack offset: a slider's path's start, or the note.
+glm::vec2 GetHeadPosition(const CircleChart& chart, const CircleNote& note);
+
+// Where a note's head is drawn at `time`: a gliding note along its path (at its start before it
+// sets off, landed from its time on), else where it's struck.
+glm::vec2 GetHeadPositionAt(const CircleChart& chart, const CircleNote& note, SongTimeUs time);
+
+// When a note starts to show: at the start of its approach, or a gliding note when it appears.
+SongTimeUs GetAppearTime(const CircleChart& chart, const CircleNote& note);
+
+// A flick's speed in playfield units per second.
+float GetFlickSpeed(const CircleChart& chart, const CircleNote& note);
+
+// A gliding note's path (CircleNote::FirstGlidePoint) from `points`: where the note lands, then
+// out from there to where it comes in, a curve as a slider's path is. It's cut short, or carried
+// on straight the way it ends, to `length`. The path comes back as GLIDE_PATH_POINTS points
+// evenly spaced along it, from where the note comes in to where it lands; empty for fewer than two
+// points or no length.
+std::vector<glm::vec2> MakeGlidePath(const std::vector<glm::vec2>& points, CurveType curve, float length);
 
 // The curve through `points`, sampled densely (not clipped to a length). For drawing a path that
 // is still being authored, and for measuring one.

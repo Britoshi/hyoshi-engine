@@ -1,6 +1,7 @@
 #include "rhythm/SongClock.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace hyoshi::rhythm
 {
@@ -22,6 +23,9 @@ HostTimeNs GetStallThreshold(const audio::AudioClockSnapshot& snapshot)
 
 void SongClock::Update(const audio::AudioClockSnapshot& snapshot, HostTimeNs now)
 {
+    const double rate = snapshot.MusicRate > 0.0 ? snapshot.MusicRate : 1.0;
+    const bool isRateChange = rate != musicRate;
+    musicRate = rate;
     rawSongTime = ComputeRawSongTime(snapshot, now);
 
     if (hasPendingSeek)
@@ -34,7 +38,7 @@ void SongClock::Update(const audio::AudioClockSnapshot& snapshot, HostTimeNs now
         hasPendingSeek = false;
     }
 
-    const bool isJump = snapshot.SeekGeneration != lastSeekGeneration;
+    const bool isJump = snapshot.SeekGeneration != lastSeekGeneration || isRateChange;
     lastSeekGeneration = snapshot.SeekGeneration;
     const SongTimeUs nowUs = FloorDiv(now, NS_PER_US);
 
@@ -53,17 +57,18 @@ void SongClock::Update(const audio::AudioClockSnapshot& snapshot, HostTimeNs now
         return;
     }
 
-    // Starting, resuming from pause, or a seek: take the new position as is.
+    // Starting, resuming from pause, a seek, or a new rate: take the new position as is.
     if (!isPlaying || isJump)
     {
-        mappingOffsetUs = rawSongTime - nowUs;
+        mappingOffsetUs = rawSongTime;
+        anchorHostUs = nowUs;
         songTime = rawSongTime;
         isPlaying = true;
         isStalled = false;
         return;
     }
 
-    const SongTimeUs error = rawSongTime - (nowUs + mappingOffsetUs);
+    const SongTimeUs error = rawSongTime - MapHostTime(nowUs);
     if (isStalled || error > SNAP_THRESHOLD_US || error < -SNAP_THRESHOLD_US)
     {
         // Re-anchor. If that is behind the time already shown (the clock ran ahead while the
@@ -76,7 +81,7 @@ void SongClock::Update(const audio::AudioClockSnapshot& snapshot, HostTimeNs now
     {
         mappingOffsetUs += std::clamp(error / CORRECTION_DIVISOR, -MAX_CORRECTION_US, MAX_CORRECTION_US);
     }
-    songTime = std::max(songTime, nowUs + mappingOffsetUs);
+    songTime = std::max(songTime, MapHostTime(nowUs));
 }
 
 void SongClock::ExpectSeek(int64_t seekGeneration, SongTimeUs target)
@@ -93,7 +98,20 @@ SongTimeUs SongClock::HostTimeToSongTime(HostTimeNs hostTime) const
     {
         return songTime;
     }
-    return FloorDiv(hostTime, NS_PER_US) + mappingOffsetUs;
+    return MapHostTime(FloorDiv(hostTime, NS_PER_US));
+}
+
+HostTimeNs SongClock::SongTimeToHostTime(SongTimeUs time) const
+{
+    const SongTimeUs musicUs = time - mappingOffsetUs;
+    const SongTimeUs hostUs =
+        musicRate == 1.0 ? musicUs : static_cast<SongTimeUs>(std::llround(static_cast<double>(musicUs) / musicRate));
+    return (anchorHostUs + hostUs) * NS_PER_US;
+}
+
+SongTimeUs SongClock::ToMusicTime(SongTimeUs us) const
+{
+    return musicRate == 1.0 ? us : static_cast<SongTimeUs>(std::llround(static_cast<double>(us) * musicRate));
 }
 
 SongTimeUs SongClock::SongTimeForMusicFrame(DspFrame frame, int64_t sampleRate) const
@@ -119,7 +137,7 @@ SongTimeUs SongClock::ComputeRawSongTime(const audio::AudioClockSnapshot& snapsh
     if (snapshot.IsMusicPlaying != 0)
     {
         const HostTimeNs elapsed = std::clamp<HostTimeNs>(now - snapshot.HostTime, 0, GetStallThreshold(snapshot));
-        musicTime += elapsed / NS_PER_US;
+        musicTime += ToMusicTime(elapsed / NS_PER_US);
     }
     return musicTime - GetTotalOffsetUs();
 }

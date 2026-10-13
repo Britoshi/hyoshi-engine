@@ -109,6 +109,10 @@ public:
     void PauseMusic() override
     {
     }
+    void SetMusicRate(double /*rate*/) override
+    {
+    }
+
     int64_t SeekMusic(DspFrame /*frame*/) override
     {
         return 0;

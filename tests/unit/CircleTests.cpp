@@ -4,6 +4,7 @@
 #include "osu/OsuStandardImporter.h"
 
 #include <doctest/doctest.h>
+#include <glm/geometric.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -19,6 +20,7 @@ using hyoshi::circle::CircleJudge;
 using hyoshi::circle::CircleNote;
 using hyoshi::circle::CircleScore;
 using hyoshi::circle::CurveType;
+using hyoshi::circle::HeadKind;
 using hyoshi::circle::MakeAction;
 using hyoshi::circle::NoteState;
 using hyoshi::circle::NoteType;
@@ -105,6 +107,13 @@ CircleNote Circle(SongTimeUs time, glm::vec2 position)
     note.Time = time;
     note.EndTime = time;
     note.Position = position;
+    return note;
+}
+
+CircleNote WithHead(CircleNote note, HeadKind head, float flickSpeed = 0.0f)
+{
+    note.Head = head;
+    note.FlickSpeed = flickSpeed;
     return note;
 }
 
@@ -1009,4 +1018,301 @@ TEST_CASE("Circle score: lazer's standardised score, weighted accuracy, and rank
     score.Add(event(0, Judgment::Miss));
     CHECK(score.GetAccuracyBasisPoints() == 9'750);
     CHECK(std::string(score.GetRank()) == "A");
+}
+
+TEST_CASE("Circle judge: a slide is struck by a pointer down on it, from its time to the end of its window")
+{
+    const CircleChart chart = MakeChart({WithHead(Circle(1'000'000, {100.0f, 100.0f}), HeadKind::Slide),
+                                         WithHead(Circle(2'000'000, {300.0f, 100.0f}), HeadKind::Slide),
+                                         WithHead(Circle(3'000'000, {100.0f, 300.0f}), HeadKind::Slide),
+                                         WithHead(Circle(4'000'000, {300.0f, 300.0f}), HeadKind::Slide),
+                                         WithHead(Circle(5'000'000, {100.0f, 100.0f}), HeadKind::Slide)});
+    CircleJudge judge;
+    judge.Reset(chart);
+    std::vector<JudgmentEvent> events;
+
+    // Down on it before its time: nothing then, and struck at its time, untimed.
+    judge.ProcessAction(Press(900'000, {100.0f, 100.0f}), events);
+    CHECK(events.empty());
+    judge.Advance(1'000'000, events);
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].NoteIndex == 0);
+    CHECK(events[0].Result == Judgment::Great);
+    CHECK(events[0].Time == 1'000'000);
+    CHECK(events[0].ErrorUs == 0);
+    CHECK_FALSE(events[0].IsTimed);
+
+    // Sliding onto it late, still in its window.
+    judge.ProcessAction(Move(1'900'000, {200.0f, 100.0f}), events);
+    judge.ProcessAction(Move(2'080'000, {300.0f, 100.0f}), events);
+    REQUIRE(events.size() == 2);
+    CHECK(events[1].NoteIndex == 1);
+    CHECK(events[1].Result == Judgment::Great);
+    CHECK(events[1].Time == 2'080'000);
+
+    // Over it without being down: nothing, and it misses.
+    judge.ProcessAction(Release(2'500'000, {300.0f, 100.0f}), events);
+    judge.ProcessAction(Move(3'000'000, {100.0f, 300.0f}), events);
+    judge.ProcessAction(Move(3'050'000, {100.0f, 300.0f}), events);
+    judge.Advance(3'200'000, events);
+    REQUIRE(events.size() == 3);
+    CHECK(events[2].NoteIndex == 2);
+    CHECK(events[2].Result == Judgment::Miss);
+    CHECK(events[2].Time == 3'150'001);
+
+    // A press landing on it in its window.
+    judge.ProcessAction(Press(4'020'000, {300.0f, 300.0f}), events);
+    REQUIRE(events.size() == 4);
+    CHECK(events[3].NoteIndex == 3);
+    CHECK(events[3].Result == Judgment::Great);
+
+    // Arriving after its window is too late.
+    judge.ProcessAction(Move(5'160'000, {100.0f, 100.0f}), events);
+    REQUIRE(events.size() == 5);
+    CHECK(events[4].NoteIndex == 4);
+    CHECK(events[4].Result == Judgment::Miss);
+    CHECK(judge.IsFinished());
+}
+
+TEST_CASE("Circle judge: a flick is struck by a pointer crossing it fast enough, down or not")
+{
+    // The chart's speed, 2 widths a second, is 1024 units a second; the fourth flick's own is 30.
+    const glm::vec2 spot{256.0f, 192.0f};
+    const CircleChart chart = MakeChart(
+        {WithHead(Circle(1'000'000, spot), HeadKind::Flick), WithHead(Circle(2'000'000, spot), HeadKind::Flick),
+         WithHead(Circle(3'000'000, spot), HeadKind::Flick), WithHead(Circle(4'000'000, spot), HeadKind::Flick, 30.0f),
+         WithHead(Circle(4'500'000, spot), HeadKind::Flick)});
+    CircleJudge judge;
+    judge.Reset(chart);
+    std::vector<JudgmentEvent> events;
+
+    // Swept across without a button: 312 units in 30 ms.
+    judge.ProcessAction(Move(970'000, {100.0f, 192.0f}), events);
+    judge.ProcessAction(Move(1'000'000, {412.0f, 192.0f}), events);
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].NoteIndex == 0);
+    CHECK(events[0].Result == Judgment::Great);
+    CHECK(events[0].Time == 1'000'000);
+    CHECK_FALSE(events[0].IsTimed);
+
+    // Too slow: 8 units in 50 ms, so it misses. (Getting there, at 1.5 s, is a fast move, but
+    // before its window.)
+    judge.ProcessAction(Move(1'500'000, {240.0f, 192.0f}), events);
+    judge.ProcessAction(Move(1'950'000, {248.0f, 192.0f}), events);
+    judge.ProcessAction(Move(2'000'000, {256.0f, 192.0f}), events);
+    judge.Advance(2'200'000, events);
+    REQUIRE(events.size() == 2);
+    CHECK(events[1].NoteIndex == 1);
+    CHECK(events[1].Result == Judgment::Miss);
+
+    // Too early: fast, before its window opens at 2.85 s.
+    judge.ProcessAction(Release(2'790'000, {256.0f, 192.0f}), events);
+    judge.ProcessAction(Move(2'800'000, {100.0f, 192.0f}), events);
+    judge.ProcessAction(Move(2'830'000, {412.0f, 192.0f}), events);
+    judge.Advance(3'200'000, events);
+    REQUIRE(events.size() == 3);
+    CHECK(events[2].NoteIndex == 2);
+    CHECK(events[2].Result == Judgment::Miss);
+
+    // Its own speed, 15360 units a second: 10400 isn't enough, 17067 is.
+    judge.ProcessAction(Release(3'900'000, {412.0f, 192.0f}), events);
+    judge.ProcessAction(Move(3'920'000, {100.0f, 192.0f}), events);
+    judge.ProcessAction(Move(3'950'000, {412.0f, 192.0f}), events);
+    CHECK(events.size() == 3);
+    judge.ProcessAction(Release(3'960'000, {412.0f, 192.0f}), events);
+    judge.ProcessAction(Move(3'970'000, {0.0f, 192.0f}), events);
+    judge.ProcessAction(Move(4'000'000, {512.0f, 192.0f}), events);
+    REQUIRE(events.size() == 4);
+    CHECK(events[3].NoteIndex == 3);
+    CHECK(events[3].Result == Judgment::Great);
+
+    // Down, from a press beside it: a press is no flick, but the swipe after it is.
+    judge.ProcessAction(Release(4'400'000, {512.0f, 192.0f}), events);
+    judge.ProcessAction(Press(4'470'000, {0.0f, 192.0f}), events);
+    CHECK(events.size() == 4);
+    judge.ProcessAction(Move(4'500'000, {512.0f, 192.0f}), events);
+    REQUIRE(events.size() == 5);
+    CHECK(events[4].NoteIndex == 4);
+    CHECK(events[4].Result == Judgment::Great);
+    CHECK(judge.IsFinished());
+}
+
+TEST_CASE("Circle judge: a pointer resting, then jumping, moved fast over the speed window")
+{
+    const CircleChart chart = MakeChart({WithHead(Circle(1'000'000, {256.0f, 192.0f}), HeadKind::Flick)});
+    // It stays where it last was between actions: at 100 until a moment ago, so 312 units in the
+    // last 50 ms.
+    {
+        CircleJudge judge;
+        judge.Reset(chart);
+        std::vector<JudgmentEvent> events;
+        judge.ProcessAction(Move(500'000, {100.0f, 192.0f}), events);
+        judge.ProcessAction(Move(1'000'000, {412.0f, 192.0f}), events);
+        REQUIRE(events.size() == 1);
+        CHECK(events[0].Result == Judgment::Great);
+    }
+    // Just after a press, it hasn't been tracked long enough for any speed.
+    {
+        CircleJudge judge;
+        judge.Reset(chart);
+        std::vector<JudgmentEvent> events;
+        judge.ProcessAction(Press(990'000, {100.0f, 192.0f}), events);
+        judge.ProcessAction(Move(1'000'000, {412.0f, 192.0f}), events);
+        CHECK(events.empty());
+    }
+}
+
+TEST_CASE("Circle judge: slides and flicks lock no notes and aren't force-missed; a flick is locked")
+{
+    // A pressed circle, then a flick: swept before the circle's time, the flick is locked; after
+    // it, it's struck and the circle missed.
+    {
+        const CircleChart chart = MakeChart(
+            {Circle(1'000'000, {100.0f, 100.0f}), WithHead(Circle(1'100'000, {300.0f, 100.0f}), HeadKind::Flick)});
+        CircleJudge judge;
+        judge.Reset(chart);
+        std::vector<JudgmentEvent> events;
+        judge.ProcessAction(Move(950'000, {300.0f, 0.0f}), events);
+        judge.ProcessAction(Move(980'000, {300.0f, 200.0f}), events);
+        CHECK(events.empty());
+        judge.ProcessAction(Release(985'000, {300.0f, 200.0f}), events);
+        judge.ProcessAction(Move(1'010'000, {300.0f, 0.0f}), events);
+        judge.ProcessAction(Move(1'040'000, {300.0f, 200.0f}), events);
+        REQUIRE(events.size() == 2);
+        CHECK(events[0].NoteIndex == 0);
+        CHECK(events[0].Result == Judgment::Miss);
+        CHECK(events[1].NoteIndex == 1);
+        CHECK(events[1].Result == Judgment::Great);
+    }
+
+    // A slide, then a circle pressed before the slide's time: the slide doesn't lock it, and keeps
+    // its window, struck after.
+    {
+        const CircleChart chart = MakeChart(
+            {WithHead(Circle(1'000'000, {100.0f, 100.0f}), HeadKind::Slide), Circle(1'050'000, {300.0f, 100.0f})});
+        CircleJudge judge;
+        judge.Reset(chart);
+        std::vector<JudgmentEvent> events;
+        judge.ProcessAction(Press(980'000, {300.0f, 100.0f}, 0), events);
+        REQUIRE(events.size() == 1);
+        CHECK(events[0].NoteIndex == 1);
+        CHECK(events[0].Result == Judgment::Good);
+        CHECK(judge.GetNoteState(0) == NoteState::Pending);
+        judge.ProcessAction(Touch(1'010'000, {100.0f, 100.0f}, 1), events);
+        REQUIRE(events.size() == 2);
+        CHECK(events[1].NoteIndex == 0);
+        CHECK(events[1].Result == Judgment::Great);
+    }
+}
+
+TEST_CASE("Circle autoplay: slides, flicks, and sliders with their heads, every one Great")
+{
+    CircleChart chart;
+    chart.Difficulty.CircleSize = 4.0f;
+    chart.Difficulty.OverallDifficulty = 8.0f;
+    chart.Difficulty.StackLeniency = 0.0f;
+    chart.ControlPoints = {{100.0f, 300.0f}, {200.0f, 300.0f}, {300.0f, 300.0f}, {400.0f, 300.0f}};
+    CircleNote slideSlider = WithHead(Slider(2'000'000, 2'500'000, {100.0f, 300.0f}, 0, 100.0f), HeadKind::Slide);
+    slideSlider.TickDistance = 25.0f;
+    CircleNote flickSlider = WithHead(Slider(3'000'000, 3'500'000, {300.0f, 300.0f}, 2, 100.0f), HeadKind::Flick);
+    flickSlider.TickDistance = 25.0f;
+    chart.Notes = {Circle(1'000'000, {100.0f, 100.0f}), WithHead(Circle(1'250'000, {200.0f, 100.0f}), HeadKind::Slide),
+                   WithHead(Circle(1'500'000, {300.0f, 100.0f}), HeadKind::Flick),
+                   // Right after another flick, and a fast one.
+                   WithHead(Circle(1'600'000, {300.0f, 200.0f}), HeadKind::Flick, 10.0f), slideSlider, flickSlider,
+                   // During the slider, so on another pointer.
+                   WithHead(Circle(3'200'000, {450.0f, 100.0f}), HeadKind::Slide)};
+    chart.Notes.front().IsNewCombo = true;
+    FinishCircleChart(chart);
+
+    const std::vector<JudgmentEvent> events =
+        RunReplay(chart, hyoshi::circle::MakeAutoplayActions(chart), chart.GetEndTime() + 1'000'000);
+    CircleScore score;
+    score.Reset(chart);
+    size_t heads = 0;
+    for (const JudgmentEvent& event : events)
+    {
+        CAPTURE(event.NoteIndex);
+        CAPTURE(event.Part);
+        CHECK(event.Result == Judgment::Great);
+        if (event.Part <= 1)
+        {
+            ++heads;
+            // Struck right on time.
+            CHECK(event.Time == chart.Notes[event.NoteIndex].Time);
+        }
+        score.Add(event);
+    }
+    CHECK(heads == chart.GetJudgmentCount());
+    CHECK(score.GetMaxCombo() == chart.GetMaxCombo());
+    CHECK(score.GetScore() == 1'000'000);
+}
+
+TEST_CASE("Circle gliding notes: a path from where they come in, drawn along it, judged where they land")
+{
+    using hyoshi::circle::GLIDE_PATH_POINTS;
+    using hyoshi::circle::MakeGlidePath;
+    // Straight up from where it lands, carried on past its end to the length, evenly spaced.
+    std::vector<glm::vec2> path = MakeGlidePath({{100.0f, 300.0f}, {100.0f, 200.0f}}, CurveType::Linear, 300.0f);
+    REQUIRE(path.size() == GLIDE_PATH_POINTS);
+    CheckNear(path.front(), {100.0f, 0.0f});
+    CheckNear(path[1], {100.0f, 300.0f / 63.0f});
+    CheckNear(path.back(), {100.0f, 300.0f});
+    // Cut short.
+    path = MakeGlidePath({{100.0f, 300.0f}, {100.0f, 200.0f}}, CurveType::Linear, 50.0f);
+    CheckNear(path.front(), {100.0f, 250.0f});
+    // Along a curve, evenly by its length.
+    path = MakeGlidePath({{0.0f, 0.0f}, {100.0f, -100.0f}, {200.0f, 0.0f}}, CurveType::Bezier, 150.0f);
+    REQUIRE(path.size() == GLIDE_PATH_POINTS);
+    for (size_t i = 1; i < path.size(); ++i)
+    {
+        CHECK(glm::distance(path[i - 1], path[i]) == doctest::Approx(150.0f / 63.0f).epsilon(0.02));
+    }
+    // Nothing to glide along.
+    CHECK(MakeGlidePath({{100.0f, 300.0f}}, CurveType::Linear, 300.0f).empty());
+    CHECK(MakeGlidePath({{100.0f, 300.0f}, {100.0f, 200.0f}}, CurveType::Linear, 0.0f).empty());
+
+    // It appears at 0.5 s, sets off at 1 s, and lands at 2 s, on a note after it that would stack.
+    CircleChart chart;
+    chart.Difficulty.CircleSize = 4.0f;
+    chart.Difficulty.OverallDifficulty = 5.0f;
+    chart.Difficulty.ApproachRate = 5.0f;
+    chart.Difficulty.StackLeniency = 0.7f;
+    chart.GlidePath = MakeGlidePath({{100.0f, 300.0f}, {100.0f, 200.0f}}, CurveType::Linear, 300.0f);
+    CircleNote gliding = Circle(2'000'000, {100.0f, 300.0f});
+    gliding.GlidePointCount = static_cast<uint32_t>(chart.GlidePath.size());
+    gliding.GlideStartTime = 1'000'000;
+    gliding.GlideAppearTime = 500'000;
+    gliding.IsNewCombo = true;
+    chart.Notes = {gliding, Circle(2'100'000, {100.0f, 300.0f})};
+    FinishCircleChart(chart);
+    const CircleNote& note = chart.Notes[0];
+    REQUIRE(note.IsGliding());
+    CHECK_FALSE(chart.Notes[1].IsGliding());
+    CHECK(hyoshi::circle::GetAppearTime(chart, note) == 500'000);
+    CHECK(hyoshi::circle::GetAppearTime(chart, chart.Notes[1]) == 2'100'000 - 1'200'000);
+    // Waiting where it comes in, then along the path at an even speed, landed from its time.
+    CheckNear(hyoshi::circle::GetHeadPositionAt(chart, note, 700'000), {100.0f, 0.0f});
+    CheckNear(hyoshi::circle::GetHeadPositionAt(chart, note, 1'500'000), {100.0f, 150.0f});
+    CheckNear(hyoshi::circle::GetHeadPositionAt(chart, note, 2'000'000), {100.0f, 300.0f});
+    CheckNear(hyoshi::circle::GetHeadPositionAt(chart, chart.Notes[1], 1'500'000), {100.0f, 300.0f});
+    // Gliding notes don't stack, unless the chart says so.
+    CheckNear(note.StackOffset, {0.0f, 0.0f});
+    CheckNear(chart.Notes[1].StackOffset, {0.0f, 0.0f});
+
+    // Judged where it lands, not where it's drawn before.
+    CircleJudge judge;
+    judge.Reset(chart);
+    std::vector<JudgmentEvent> events;
+    judge.ProcessAction(Press(1'900'000, {100.0f, 255.0f}), events);
+    CHECK(events.empty());
+    judge.ProcessAction(Release(1'910'000, {100.0f, 255.0f}), events);
+    judge.ProcessAction(Press(2'000'000, {100.0f, 300.0f}), events);
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].NoteIndex == 0);
+    CHECK(events[0].Result == Judgment::Great);
+
+    chart.Difficulty.AreGlidingNotesStacked = true;
+    FinishCircleChart(chart);
+    CHECK(chart.Notes[0].StackOffset.x < 0.0f);
 }

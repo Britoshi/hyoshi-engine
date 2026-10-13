@@ -38,11 +38,13 @@ std::string ToLower(std::string text)
     return text;
 }
 
-bool IsChartFile(const fs::path& path)
+bool IsChartFile(const fs::path& path, const LibraryOptions& options)
 {
     const std::string name = ToLower(path.filename().string());
     return name.ends_with(".osu") || name.ends_with(".rchart.json") || name.ends_with(".sm") ||
-           name.ends_with(".ssc") || name.ends_with(".medley.json") || name == "info.yml" || name == "info.txt";
+           name.ends_with(".ssc") || name.ends_with(".medley.json") || name == "info.yml" || name == "info.txt" ||
+           std::any_of(options.MoreChartFiles.begin(), options.MoreChartFiles.end(),
+                       [&name](const std::string& ending) { return name.ends_with(ending); });
 }
 
 // Map sets and StepMania packs: a song folder's charts can be this many folders down.
@@ -74,7 +76,7 @@ void AddChart(const fs::path& path, const fs::path& songFolder, ChartReader read
 }
 
 // The folder's charts, then its folders' (down to `depth` more levels).
-void ScanFolder(const fs::path& folder, const fs::path& songFolder, ChartReader reader, int depth,
+void ScanFolder(const fs::path& folder, const fs::path& songFolder, const LibraryOptions& options, int depth,
                 std::vector<Found>& found)
 {
     std::error_code error;
@@ -94,7 +96,7 @@ void ScanFolder(const fs::path& folder, const fs::path& songFolder, ChartReader 
             subfolders.push_back(entry.path());
             continue;
         }
-        if (!entry.is_regular_file(entryError) || !IsChartFile(entry.path()) ||
+        if (!entry.is_regular_file(entryError) || !IsChartFile(entry.path(), options) ||
             (hasMedley && !IsMedleyFile(entry.path().string())))
         {
             continue;
@@ -109,14 +111,14 @@ void ScanFolder(const fs::path& folder, const fs::path& songFolder, ChartReader 
         {
             continue;
         }
-        AddChart(entry.path(), songFolder, reader, found);
+        AddChart(entry.path(), songFolder, options.Reader, found);
     }
     if (depth > 0)
     {
         std::sort(subfolders.begin(), subfolders.end());
         for (const fs::path& subfolder : subfolders)
         {
-            ScanFolder(subfolder, songFolder, reader, depth - 1, found);
+            ScanFolder(subfolder, songFolder, options, depth - 1, found);
         }
     }
 }
@@ -307,7 +309,7 @@ std::vector<LibrarySong> ScanSongFolders(const std::vector<std::string>& folders
         {
             continue;
         }
-        ScanFolder(folder, folder, options.Reader, MAX_FOLDER_DEPTH, found);
+        ScanFolder(folder, folder, options, MAX_FOLDER_DEPTH, found);
     }
 
     // The same chart can be here twice, as an .osu and as its conversion: keep the .osu.

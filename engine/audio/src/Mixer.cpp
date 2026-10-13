@@ -3,6 +3,7 @@
 #include "audio/MusicStream.h"
 
 #include <algorithm>
+#include <cmath>
 #include <span>
 
 namespace hyoshi::audio
@@ -48,8 +49,8 @@ void Mixer::Render(float* output, uint32_t frameCount, HostTimeNs callbackTime)
     // blocks for its position are decoded, and after holding, until a whole callback's worth is, so
     // it doesn't stutter as it starts. Collect also frees blocks from before a seek.
     const DspFrame musicWanted =
-        isMusicPlaying ? std::clamp<DspFrame>(GetMusicFrameCount() - musicCursor, 0, frameCount) : 0;
-    const DspFrame musicReady = stream != nullptr ? stream->Collect() : musicWanted;
+        isMusicPlaying ? std::clamp<DspFrame>(GetMusicFramesFor(frameCount), 0, GetMusicFrameCount() - musicCursor) : 0;
+    const DspFrame musicReady = stream != nullptr ? stream->Collect() - musicSkip : musicWanted;
     const bool isMusicAdvancing = musicWanted > 0 && musicReady >= (wasMusicAdvancing ? 1 : musicWanted);
 
     AudioClockSnapshot current;
@@ -61,20 +62,23 @@ void Mixer::Render(float* output, uint32_t frameCount, HostTimeNs callbackTime)
     current.SeekGeneration = seekGeneration;
     current.CommandsApplied = commandsApplied;
     current.CallbackFrames = frameCount;
+    current.MusicRate = musicRate;
     snapshot.Store(current);
 
     std::fill_n(output, size_t{frameCount} * PcmBuffer::CHANNELS, 0.0f);
 
     const DspFrame musicStart = musicCursor;
-    const DspFrame musicFramesRendered = isMusicAdvancing ? RenderMusic(output, musicWanted) : 0;
-    if (wasMusicAdvancing && musicFramesRendered < musicWanted)
+    const double musicStartPhase = musicPhase;
+    const DspFrame rendered = isMusicAdvancing ? RenderMusic(output, frameCount) : 0;
+    const DspFrame musicFramesPlayed = musicCursor - musicStart;
+    // Short of the callback before the music's end: the stream's decoder fell behind.
+    const bool isShort = musicWanted > 0 && rendered < frameCount && musicCursor < GetMusicFrameCount();
+    if (wasMusicAdvancing && isShort)
     {
-        // The stream's decoder fell behind in the middle of playback.
         musicUnderrunCount.fetch_add(1, std::memory_order_relaxed);
     }
     // Running short ends a stretch of playback, so one stall counts once.
-    wasMusicAdvancing = isMusicAdvancing && musicFramesRendered == musicWanted;
-    musicCursor += musicFramesRendered;
+    wasMusicAdvancing = isMusicAdvancing && !isShort;
     if (musicCursor >= GetMusicFrameCount())
     {
         isMusicPlaying = false;
@@ -101,12 +105,18 @@ void Mixer::Render(float* output, uint32_t frameCount, HostTimeNs callbackTime)
                 voice = Voice{};
                 continue;
             }
-            if (relative >= musicFramesRendered)
+            if (relative >= musicFramesPlayed)
             {
                 ++activeVoices;
                 continue;
             }
             startOffset = relative;
+            if (musicRate != 1.0 || musicStartPhase != 0.0)
+            {
+                // The first frame rendered at or past the start frame.
+                const double offset = std::ceil((static_cast<double>(relative) - musicStartPhase) / musicRate);
+                startOffset = std::clamp<DspFrame>(static_cast<DspFrame>(offset), 0, rendered - 1);
+            }
             voice.StartMusicFrame = NOT_SCHEDULED;
         }
 
@@ -146,7 +156,8 @@ void Mixer::Apply(const AudioCommand& command)
     case AudioCommandType::SetMusic:
         music = command.Buffer;
         stream = command.Stream;
-        musicCursor = 0;
+        SetMusicCursor(0);
+        musicRate = 1.0;
         isMusicPlaying = false;
         wasMusicAdvancing = false;
         ++seekGeneration;
@@ -161,7 +172,7 @@ void Mixer::Apply(const AudioCommand& command)
         break;
     case AudioCommandType::SeekMusic:
         // The generation changes even without music, so the main thread can predict it.
-        musicCursor = std::clamp<DspFrame>(command.Frame, 0, GetMusicFrameCount());
+        SetMusicCursor(std::clamp<DspFrame>(command.Frame, 0, GetMusicFrameCount()));
         if (musicCursor >= GetMusicFrameCount())
         {
             isMusicPlaying = false;
@@ -173,6 +184,14 @@ void Mixer::Apply(const AudioCommand& command)
         wasMusicAdvancing = false;
         ++seekGeneration;
         CancelScheduledVoices();
+        break;
+    case AudioCommandType::SetMusicRate:
+        musicRate = std::isfinite(command.Rate) ? std::clamp(command.Rate, MIN_MUSIC_RATE, MAX_MUSIC_RATE) : 1.0;
+        if (musicRate == 1.0)
+        {
+            // Back on whole frames, a fraction of a frame on.
+            musicPhase = 0.0;
+        }
         break;
     case AudioCommandType::PlayVoice:
     {
@@ -213,7 +232,7 @@ void Mixer::Apply(const AudioCommand& command)
         if (music == command.Buffer)
         {
             music = nullptr;
-            musicCursor = 0;
+            SetMusicCursor(0);
             isMusicPlaying = false;
         }
         break;
@@ -241,15 +260,39 @@ DspFrame Mixer::GetMusicFrameCount() const
     return stream != nullptr ? stream->GetFrameCount() : 0;
 }
 
-// Mixes up to frameCount frames of music from the cursor, and returns how many there were: fewer
-// than asked only if a stream ran out of decoded blocks.
+DspFrame Mixer::GetMusicFramesFor(DspFrame frameCount) const
+{
+    if (musicRate == 1.0 && musicPhase == 0.0)
+    {
+        return frameCount;
+    }
+    return static_cast<DspFrame>(std::ceil(musicPhase + (static_cast<double>(frameCount) * musicRate)));
+}
+
+void Mixer::SetMusicCursor(DspFrame frame)
+{
+    musicCursor = frame;
+    musicPhase = 0.0;
+    musicSkip = 0;
+}
+
+// Mixes up to frameCount frames of music from the cursor, moves the cursor past what they played,
+// and returns how many it mixed: fewer than asked only at the end of the music, or if a stream ran
+// out of decoded blocks.
 DspFrame Mixer::RenderMusic(float* output, DspFrame frameCount)
 {
+    if (musicRate != 1.0 || musicPhase != 0.0 || musicSkip != 0)
+    {
+        return RenderMusicAtRate(output, frameCount);
+    }
+
+    frameCount = std::min(frameCount, GetMusicFrameCount() - musicCursor);
     const float gain = GetBusGain(Bus::Music);
     if (music != nullptr)
     {
         MixInto(output, music->Samples.data() + (musicCursor * PcmBuffer::CHANNELS), static_cast<uint32_t>(frameCount),
                 gain);
+        musicCursor += frameCount;
         return frameCount;
     }
 
@@ -265,6 +308,79 @@ DspFrame Mixer::RenderMusic(float* output, DspFrame frameCount)
         MixInto(output + (rendered * PcmBuffer::CHANNELS), ready.data(), frames, gain);
         stream->Consume(frames);
         rendered += frames;
+    }
+    musicCursor += rendered;
+    return rendered;
+}
+
+// Each frame rendered interpolates between the music frames either side of the position, which
+// moves musicRate frames per frame. A stream comes a block at a time, so on a block's last frame it
+// holds that frame rather than interpolate toward the next block's first, which is inaudible.
+DspFrame Mixer::RenderMusicAtRate(float* output, DspFrame frameCount)
+{
+    const float scale = GetBusGain(Bus::Music) * INT16_TO_FLOAT;
+    const DspFrame end = GetMusicFrameCount();
+    DspFrame rendered = 0;
+    while (rendered < frameCount && musicCursor < end)
+    {
+        std::span<const int16_t> ready;
+        if (music != nullptr)
+        {
+            ready = std::span<const int16_t>(music->Samples)
+                        .subspan(static_cast<size_t>(musicCursor) * PcmBuffer::CHANNELS);
+        }
+        else
+        {
+            while (musicSkip > 0)
+            {
+                const std::span<const int16_t> skipped =
+                    stream->Peek(static_cast<uint32_t>(std::min<DspFrame>(musicSkip, MusicStream::BLOCK_FRAMES)));
+                if (skipped.empty())
+                {
+                    break;
+                }
+                const auto frames = static_cast<uint32_t>(skipped.size() / PcmBuffer::CHANNELS);
+                stream->Consume(frames);
+                musicSkip -= frames;
+            }
+            if (musicSkip > 0)
+            {
+                break;
+            }
+            ready = stream->Peek(MusicStream::BLOCK_FRAMES);
+        }
+        if (ready.empty())
+        {
+            break;
+        }
+
+        const auto readyFrames = static_cast<DspFrame>(ready.size() / PcmBuffer::CHANNELS);
+        DspFrame index = 0;
+        while (rendered < frameCount && index < readyFrames)
+        {
+            const int16_t* from = ready.data() + (index * PcmBuffer::CHANNELS);
+            const int16_t* to = index + 1 < readyFrames ? from + PcmBuffer::CHANNELS : from;
+            const auto blend = static_cast<float>(musicPhase);
+            float* target = output + (rendered * PcmBuffer::CHANNELS);
+            for (size_t channel = 0; channel < PcmBuffer::CHANNELS; ++channel)
+            {
+                const auto a = static_cast<float>(from[channel]);
+                const auto b = static_cast<float>(to[channel]);
+                target[channel] += (a + ((b - a) * blend)) * scale;
+            }
+            ++rendered;
+            musicPhase += musicRate;
+            const double step = std::floor(musicPhase);
+            musicPhase -= step;
+            index += static_cast<DspFrame>(step);
+        }
+        if (stream != nullptr)
+        {
+            const DspFrame consumed = std::min(index, readyFrames);
+            stream->Consume(static_cast<uint32_t>(consumed));
+            musicSkip = index - consumed;
+        }
+        musicCursor = std::min(musicCursor + index, end);
     }
     return rendered;
 }

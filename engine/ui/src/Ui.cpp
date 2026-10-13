@@ -414,18 +414,33 @@ bool Ui::WasClicked(const Rect& rect, std::string_view id)
 void Ui::FocusTextField(std::string_view id)
 {
     focusedField = HashBytes(14695981039346656037ull, id.data(), id.size());
+    isFieldSelected = true;
+}
+
+bool Ui::IsFocused(std::string_view id) const
+{
+    return focusedField != 0 && focusedField == HashBytes(14695981039346656037ull, id.data(), id.size());
 }
 
 bool Ui::TextField(const Rect& rect, std::string& value, std::string_view placeholder, std::string_view id)
 {
+    return TextField(rect, value, placeholder, id, TextFieldStyle{});
+}
+
+bool Ui::TextField(const Rect& rect, std::string& value, std::string_view placeholder, std::string_view id,
+                   const TextFieldStyle& style)
+{
     const uint64_t fieldId = HashBytes(14695981039346656037ull, id.data(), id.size());
     // The field, then its clear button over its right end while there's text.
     const bool wasFocused = focusedField == fieldId;
-    DrawRoundedRect(rect, std::min(rect.Height() * 0.3f, 18.0f),
-                    wasFocused ? colors::PANEL_RAISED : (IsHovered(rect) ? colors::BUTTON : colors::PANEL));
+    if (style.HasBackground)
+    {
+        DrawRoundedRect(rect, std::min(rect.Height() * 0.3f, 18.0f),
+                        wasFocused ? colors::PANEL_RAISED : (IsHovered(rect) ? colors::BUTTON : colors::PANEL));
+    }
     Rect typing = rect;
     bool isChanged = false;
-    if (!value.empty())
+    if (style.HasClearButton && !value.empty())
     {
         if (Button(typing.TakeRight(rect.Height()), "x", ButtonKind::Flat, rect.Height() * 0.5f))
         {
@@ -438,12 +453,15 @@ bool Ui::TextField(const Rect& rect, std::string& value, std::string_view placeh
     bool isHeld = false;
     if (Interact(fieldId, typing, isHovered, isHeld))
     {
+        // A click into a field selects its text; a second click puts the caret at the end.
+        isFieldSelected = focusedField != fieldId;
         focusedField = fieldId;
     }
     else if (focusedField == fieldId && isInputEnabled && isPointerPressed && !rect.Contains(pointer))
     {
         focusedField = 0;
     }
+    const bool isSelected = focusedField == fieldId && style.SelectsAllOnFocus && isFieldSelected;
     const auto take = [this](uint32_t code)
     {
         const auto found = std::find(pressedKeys.begin(), pressedKeys.end(), code);
@@ -461,11 +479,23 @@ bool Ui::TextField(const Rect& rect, std::string& value, std::string_view placeh
         {
             if (static_cast<unsigned char>(c) >= 0x20 && c != 0x7f)
             {
+                // Selected text is replaced by what's typed.
+                if (isSelected && isFieldSelected)
+                {
+                    value.clear();
+                    isFieldSelected = false;
+                }
                 value += c;
                 isChanged = true;
             }
         }
         typedText.clear();
+        if (isSelected && isFieldSelected && take(hyoshi::input::keys::BACKSPACE))
+        {
+            value.clear();
+            isFieldSelected = false;
+            isChanged = true;
+        }
         while (take(hyoshi::input::keys::BACKSPACE) && !value.empty())
         {
             // The last character: its lead byte and any continuation bytes (10xxxxxx).
@@ -487,22 +517,39 @@ bool Ui::TextField(const Rect& rect, std::string& value, std::string_view placeh
                       { return code >= hyoshi::input::keys::A && code <= hyoshi::input::keys::Letter('Z'); });
     }
     const bool isFocused = focusedField == fieldId;
-    if (isFocused)
+    if (isFocused && style.HasBackground)
     {
         DrawRoundedRect(Rect::FromSize({rect.Min.x, rect.Max.y - 4.0f}, {rect.Width(), 4.0f}), 2.0f, colors::ACCENT, 1);
     }
     TextOptions options;
-    options.Size = rect.Height() * 0.5f;
-    options.MaxWidth = rect.Width() - rect.Height() - 32.0f;
-    options.Tint = value.empty() ? colors::TEXT_DIM : colors::TEXT;
-    const glm::vec2 anchor{rect.Min.x + 20.0f, rect.Center().y};
-    const float width = DrawText(value.empty() ? placeholder : std::string_view(value), anchor, options, TEXT_LAYER);
-    // A blinking caret after the text.
-    if (isFocused && std::fmod(time, 1.0f) < 0.6f)
+    options.Size = style.TextSize > 0.0f ? style.TextSize : rect.Height() * 0.5f;
+    options.IsBold = style.IsBold;
+    options.Align = style.Align;
+    options.MaxWidth = rect.Width() - (2.0f * style.Margin) - (style.HasClearButton ? rect.Height() : 0.0f);
+    options.Tint = value.empty() ? colors::TEXT_DIM : style.TextColor;
+    const std::string_view shown = value.empty() ? placeholder : std::string_view(value);
+    const bool isRight = style.Align == hyoshi::renderer::TextAlign::Right;
+    const bool isCenter = style.Align == hyoshi::renderer::TextAlign::Center;
+    const float anchorX =
+        isRight ? rect.Max.x - style.Margin : (isCenter ? rect.Center().x : rect.Min.x + style.Margin);
+    const glm::vec2 anchor{anchorX, rect.Center().y};
+    const float width = MeasureText(shown, options.Size, options.IsBold);
+    const float textLeft = isRight ? anchorX - width : (isCenter ? anchorX - (width * 0.5f) : anchorX);
+    const bool isShowingSelection = isFocused && style.SelectsAllOnFocus && isFieldSelected && !value.empty();
+    if (isShowingSelection)
     {
-        const float caretX = anchor.x + (value.empty() ? 0.0f : width) + 3.0f;
-        DrawRect(Rect::FromSize({caretX, rect.Center().y - (options.Size * 0.55f)}, {3.0f, options.Size * 1.1f}),
-                 colors::TEXT, TEXT_LAYER);
+        DrawRect(Rect::FromSize({textLeft - 2.0f, rect.Center().y - (options.Size * 0.6f)},
+                                {width + 4.0f, options.Size * 1.2f}),
+                 style.SelectionColor, 1);
+    }
+    DrawText(shown, anchor, options, TEXT_LAYER);
+    // A blinking caret after the text.
+    if (isFocused && !isShowingSelection && std::fmod(time, 1.0f) < 0.6f)
+    {
+        const float caretWidth = std::max(2.0f, options.Size * 0.08f);
+        const float caretX = textLeft + (value.empty() ? 0.0f : width) + (caretWidth * 0.5f);
+        DrawRect(Rect::FromSize({caretX, rect.Center().y - (options.Size * 0.55f)}, {caretWidth, options.Size * 1.1f}),
+                 style.TextColor, TEXT_LAYER);
     }
     return isChanged;
 }

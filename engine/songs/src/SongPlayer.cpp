@@ -107,7 +107,7 @@ void SongPlayer::Update(hyoshi::HostTimeNs now)
     // Until the audio thread applies a seek, the snapshot still describes the old position.
     const bool isSeekPending = snapshot.SeekGeneration < expectedGeneration;
     isContinuous = clock.IsPlaying() && wasPlaying && !isSeekPending && snapshot.SeekGeneration == lastSeekGeneration &&
-                   !isDiscontinuity;
+                   snapshot.MusicRate == lastMusicRate && !isDiscontinuity;
     if (isContinuous && songTime < lastSongTime)
     {
         ++backwardSteps;
@@ -115,6 +115,7 @@ void SongPlayer::Update(hyoshi::HostTimeNs now)
     }
     wasPlaying = clock.IsPlaying();
     lastSeekGeneration = snapshot.SeekGeneration;
+    lastMusicRate = snapshot.MusicRate;
     lastSongTime = songTime;
     isDiscontinuity = false;
 }
@@ -134,6 +135,11 @@ void SongPlayer::OnLoaded(hyoshi::Result<int64_t> generation, DspFrame frameCoun
     expectedGeneration = generation.Value();
     pendingCursorFrame = 0;
     isDiscontinuity = true;
+    // New music plays at 1.
+    if (musicRate != 1.0)
+    {
+        audio.SetMusicRate(musicRate);
+    }
     if (shouldPlayWhenLoaded)
     {
         audio.PlayMusic();
@@ -150,6 +156,12 @@ void SongPlayer::Play()
 void SongPlayer::Pause()
 {
     audio.PauseMusic();
+}
+
+void SongPlayer::SetMusicRate(double rate)
+{
+    musicRate = rate;
+    audio.SetMusicRate(rate);
 }
 
 bool SongPlayer::IsAtEnd() const

@@ -190,6 +190,8 @@ void RebuildCircles(hyoshi::circle::CircleChart& chart, const Source& source)
     {
         note.Time += source.Delta;
         note.EndTime += source.Delta;
+        note.GlideStartTime += source.Delta;
+        note.GlideAppearTime += source.Delta;
         if (!source.Keeps(note.Time))
         {
             wasCut = true;
@@ -202,19 +204,22 @@ void RebuildCircles(hyoshi::circle::CircleChart& chart, const Source& source)
     chart.Notes = std::move(kept);
 }
 
-// Adds a source's circles (rebuilt) to the medley's: notes in time order, their control points and
-// sounds renumbered into the medley's lists, and sample points kept. The first source's difficulty
-// and colors stand (another's colors if the first has none).
+// Adds a source's circles (rebuilt) to the medley's: notes in time order, their control points,
+// glide paths, and sounds renumbered into the medley's lists, and sample points kept. The first
+// source's difficulty and colors stand (another's colors if the first has none).
 void MergeCircles(hyoshi::circle::CircleChart& into, hyoshi::circle::CircleChart from)
 {
     const auto pointOffset = static_cast<uint32_t>(into.ControlPoints.size());
+    const auto glideOffset = static_cast<uint32_t>(into.GlidePath.size());
     const auto soundOffset = static_cast<uint32_t>(into.HitSounds.size());
     into.ControlPoints.insert(into.ControlPoints.end(), from.ControlPoints.begin(), from.ControlPoints.end());
+    into.GlidePath.insert(into.GlidePath.end(), from.GlidePath.begin(), from.GlidePath.end());
     into.HitSounds.insert(into.HitSounds.end(), std::make_move_iterator(from.HitSounds.begin()),
                           std::make_move_iterator(from.HitSounds.end()));
     for (hyoshi::circle::CircleNote note : from.Notes)
     {
         note.FirstControlPoint += pointOffset;
+        note.FirstGlidePoint += glideOffset;
         note.FirstHitSound += soundOffset;
         into.Notes.push_back(note);
     }

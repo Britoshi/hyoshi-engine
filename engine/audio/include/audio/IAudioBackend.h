@@ -53,6 +53,9 @@ public:
     // Returns the SeekGeneration that snapshots will report once the audio thread applies it.
     virtual int64_t SeekMusic(DspFrame frame) = 0;
     virtual DspFrame GetMusicFrameCount() const = 0;
+    // Plays the music faster or slower, its pitch with it (a tape sped up), as an editor previews a
+    // chart. Song time follows: snapshots report the rate. New music plays at 1.
+    virtual void SetMusicRate(double rate) = 0;
 
     // Timing contract for the rhythm core.
     virtual AudioClockSnapshot GetClockSnapshot() const = 0;

@@ -18,6 +18,10 @@ namespace hyoshi::rhythm
 // corrects toward the raw estimate a little per update and re-anchors on large errors. Visuals and
 // input judgment use the same mapping. Only a seek or a pause moves song time backwards: when a
 // re-anchor lands behind the time already shown, song time holds until the music catches up.
+//
+// At a music rate other than 1 (IAudioBackend::SetMusicRate), song time runs at that rate, and the
+// latencies, which are real time, cover that much more or less of the music. A change of rate
+// re-anchors, like a seek.
 class SongClock
 {
 public:
@@ -60,11 +64,8 @@ public:
     SongTimeUs HostTimeToSongTime(HostTimeNs hostTime) const;
 
     // The inverse of HostTimeToSongTime while playing, for synthesizing input at a song time
-    // (autoplay, tests). Exact: HostTimeToSongTime(SongTimeToHostTime(t)) == t.
-    HostTimeNs SongTimeToHostTime(SongTimeUs time) const
-    {
-        return (time - mappingOffsetUs) * NS_PER_US;
-    }
+    // (autoplay, tests). Exact at a music rate of 1: HostTimeToSongTime(SongTimeToHostTime(t)) == t.
+    HostTimeNs SongTimeToHostTime(SongTimeUs time) const;
 
     // Where music frame `frame` lands on the song timeline, and back. Includes the latency and
     // offsets, so seeking to MusicFrameFor(t) shows song time t.
@@ -79,6 +80,12 @@ public:
     bool IsStalled() const
     {
         return isStalled;
+    }
+
+    // The music's rate at the last Update.
+    double GetMusicRate() const
+    {
+        return musicRate;
     }
 
     // Times the clock re-anchored to the raw estimate because the error exceeded the threshold.
@@ -96,13 +103,23 @@ public:
 private:
     int64_t GetTotalOffsetUs() const
     {
-        return OutputLatencyUs + UserAudioOffsetUs + ChartOffsetUs;
+        return ToMusicTime(OutputLatencyUs + UserAudioOffsetUs) + ChartOffsetUs;
     }
 
+    // Real time to music time, at the music's rate.
+    SongTimeUs ToMusicTime(SongTimeUs us) const;
     SongTimeUs ComputeRawSongTime(const audio::AudioClockSnapshot& snapshot, HostTimeNs now) const;
+    // The filtered song time at a host time in microseconds, while playing.
+    SongTimeUs MapHostTime(SongTimeUs hostUs) const
+    {
+        return mappingOffsetUs + ToMusicTime(hostUs - anchorHostUs);
+    }
 
-    // Filtered song time = host time in microseconds + mappingOffsetUs, while playing.
+    // Filtered song time = mappingOffsetUs + the music time since anchorHostUs (host time in
+    // microseconds), while playing.
     SongTimeUs mappingOffsetUs = 0;
+    SongTimeUs anchorHostUs = 0;
+    double musicRate = 1.0;
     SongTimeUs songTime = 0;
     SongTimeUs rawSongTime = 0;
     int64_t lastSeekGeneration = -1;

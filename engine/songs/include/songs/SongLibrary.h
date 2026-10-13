@@ -78,13 +78,16 @@ struct ImportResult
 struct LibraryOptions
 {
     ChartReader Reader = ReadManiaChart;
+    // A game's own chart files, besides the engine's, by how their names end (".abc", in lowercase).
+    // The Reader reads them.
+    std::vector<std::string> MoreChartFiles;
     // The built-in Mania chart, listed last.
     bool HasBuiltInChart = true;
 };
 
-// The songs in the song folders: chart files (.osu, .rchart.json, .sm, .ssc, and Phigros info
-// files) directly in a song folder or in folders up to three deep (a map set, or a StepMania
-// pack's song folders), read with the options' reader. Scans run on a worker.
+// The songs in the song folders: chart files (.osu, .rchart.json, .sm, .ssc, Phigros info files,
+// and the options' own) directly in a song folder or in folders up to three deep (a map set, or a
+// StepMania pack's song folders), read with the options' reader. Scans run on a worker.
 class SongLibrary
 {
 public:

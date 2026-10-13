@@ -59,6 +59,8 @@ public:
 
     void Play();
     void Pause();
+    // Plays faster or slower, pitch and all (IAudioBackend::SetMusicRate), music loaded later too.
+    void SetMusicRate(double rate);
 
     // Whether the music was advancing at the last callback.
     bool IsPlaying() const
@@ -150,6 +152,8 @@ private:
 
     hyoshi::SongTimeUs lastSongTime = 0;
     int64_t lastSeekGeneration = -1;
+    double musicRate = 1.0;
+    double lastMusicRate = 1.0;
     bool wasPlaying = false;
     bool isContinuous = false;
     bool isDiscontinuity = false;

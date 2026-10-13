@@ -130,6 +130,25 @@ enum class ButtonKind : uint8_t
     Flat
 };
 
+// How a text field looks (Ui::TextField).
+struct TextFieldStyle
+{
+    // Its rounded background (else the caller draws one), and the x that clears it.
+    bool HasBackground = true;
+    bool HasClearButton = true;
+    // Its text: the size (0 for half the field's height), color, weight, alignment, and how far in
+    // from the edge it starts.
+    float TextSize = 0.0f;
+    Color TextColor = colors::TEXT;
+    bool IsBold = false;
+    hyoshi::renderer::TextAlign Align = hyoshi::renderer::TextAlign::Left;
+    float Margin = 20.0f;
+    // Given focus, the text is selected, so what's typed first replaces it (and Backspace clears
+    // it): for a value typed anew.
+    bool SelectsAllOnFocus = false;
+    Color SelectionColor{110, 180, 255, 90};
+};
+
 struct ScrollState
 {
     // How far the content is scrolled, and where it's gliding to.
@@ -291,6 +310,15 @@ public:
     // (arrows to move through what the text finds). Its x clears it. Returns true when the text
     // changed.
     bool TextField(const Rect& rect, std::string& value, std::string_view placeholder, std::string_view id);
+    bool TextField(const Rect& rect, std::string& value, std::string_view placeholder, std::string_view id,
+                   const TextFieldStyle& style);
+    // The text field with this id has focus.
+    bool IsFocused(std::string_view id) const;
+    // Takes focus from any text field.
+    void ClearFocus()
+    {
+        focusedField = 0;
+    }
     // Whether the pointer is over the rectangle, with input enabled.
     bool IsHovered(const Rect& rect) const;
     // A click on an area that isn't a button (list rows): the press and release inside it.
@@ -352,8 +380,9 @@ private:
     float wheel = 0.0f;
     // The widget being pressed.
     uint64_t activeId = 0;
-    // The text field with focus, or 0.
+    // The text field with focus, or 0, and whether its text is selected (TextFieldStyle).
     uint64_t focusedField = 0;
+    bool isFieldSelected = false;
     std::string typedText;
 };
 

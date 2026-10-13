@@ -384,6 +384,31 @@ TEST_CASE("Mixer holds streamed music that runs dry without skipping any of it")
     CHECK(output[0] == doctest::Approx(RampValue(decoded) / 32768.0f));
 }
 
+TEST_CASE("Mixer plays streamed music at a rate across its blocks")
+{
+    MusicStream stream = MakeStream(100'000);
+    stream.DecodeBlocks();
+    Mixer mixer(RATE, 4);
+    mixer.Submit({.Type = AudioCommandType::SetMusic, .Stream = &stream});
+    mixer.Submit({.Type = AudioCommandType::SetMusicRate, .Rate = 1.5});
+    mixer.Submit({.Type = AudioCommandType::PlayMusic});
+
+    // Ten callbacks step across seven blocks' ends, some by two frames at once.
+    std::vector<float> output(size_t{1'000} * PcmBuffer::CHANNELS);
+    hyoshi::HostTimeNs time = 0;
+    for (int i = 0; i < 10; ++i)
+    {
+        mixer.Render(output.data(), 1'000, time += 1'000);
+        stream.DecodeBlocks();
+    }
+    mixer.Render(output.data(), 1'000, time += 1'000);
+    CHECK(mixer.GetSnapshot().MusicFrame == 15'000);
+    CHECK(output[0] == doctest::Approx(RampValue(15'000) / 32768.0f));
+    CHECK(output[1 * 2] == doctest::Approx((RampValue(15'001) + 0.5f) / 32768.0f));
+    CHECK(output[2 * 2] == doctest::Approx(RampValue(15'003) / 32768.0f));
+    CHECK(mixer.GetStats().MusicUnderruns == 0);
+}
+
 TEST_CASE("Mixer stops streamed music at its end")
 {
     MusicStream stream = MakeStream(1'000);

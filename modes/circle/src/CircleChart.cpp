@@ -250,7 +250,7 @@ void ComputeComboNumbers(CircleChart& chart)
 
 // osu!lazer's OsuBeatmapProcessor.applyStacking over the whole chart. Stacks measure against a
 // slider's tail (its path's end, whatever the passes), which is most of why slider-heavy charts
-// stack at all. Spinners take no part.
+// stack at all. Spinners take no part, nor do gliding notes unless the chart says so.
 void ComputeStacking(CircleChart& chart)
 {
     std::vector<CircleNote>& notes = chart.Notes;
@@ -266,7 +266,8 @@ void ComputeStacking(CircleChart& chart)
     const auto threshold = static_cast<SongTimeUs>(
         std::llround(static_cast<double>(difficulty.GetApproachUs()) * difficulty.StackLeniency));
 
-    const auto isExcluded = [&](size_t i) { return notes[i].Type == NoteType::Spinner; };
+    const auto isExcluded = [&](size_t i)
+    { return notes[i].Type == NoteType::Spinner || (notes[i].IsGliding() && !difficulty.AreGlidingNotesStacked); };
     const auto endOf = [&](size_t i)
     {
         const CircleNote& note = notes[i];
@@ -558,6 +559,95 @@ glm::vec2 GetBallPosition(const CircleChart& chart, const CircleNote& note, Song
     // Even passes run head to tail, odd ones back.
     const bool isForward = static_cast<int64_t>(pass) % 2 == 0;
     return GetPathPosition(chart, note, static_cast<float>(isForward ? within : 1.0 - within));
+}
+
+glm::vec2 GetHeadPosition(const CircleChart& chart, const CircleNote& note)
+{
+    return note.Type == NoteType::Slider && note.PathPointCount >= 2 ? GetPathPosition(chart, note, 0.0f)
+                                                                     : note.GetStackedPosition();
+}
+
+glm::vec2 GetHeadPositionAt(const CircleChart& chart, const CircleNote& note, SongTimeUs time)
+{
+    if (!note.IsGliding() || time >= note.Time)
+    {
+        return GetHeadPosition(chart, note);
+    }
+    // Evenly along the path, so at an even speed.
+    const SongTimeUs travel = note.Time - note.GlideStartTime;
+    const float along =
+        travel > 0 ? std::clamp(static_cast<float>(time - note.GlideStartTime) / static_cast<float>(travel), 0.0f, 1.0f)
+                   : 1.0f;
+    const float position = along * static_cast<float>(note.GlidePointCount - 1);
+    const auto index = std::min(static_cast<uint32_t>(position), note.GlidePointCount - 2);
+    const glm::vec2 a = chart.GlidePath[note.FirstGlidePoint + index];
+    const glm::vec2 b = chart.GlidePath[note.FirstGlidePoint + index + 1];
+    return a + ((b - a) * (position - static_cast<float>(index))) + note.StackOffset;
+}
+
+SongTimeUs GetAppearTime(const CircleChart& chart, const CircleNote& note)
+{
+    return note.IsGliding() ? note.GlideAppearTime : note.Time - chart.Difficulty.GetApproachUs();
+}
+
+float GetFlickSpeed(const CircleChart& chart, const CircleNote& note)
+{
+    return (note.FlickSpeed > 0.0f ? note.FlickSpeed : chart.Difficulty.FlickSpeed) * PLAYFIELD_WIDTH;
+}
+
+std::vector<glm::vec2> MakeGlidePath(const std::vector<glm::vec2>& points, CurveType curve, float length)
+{
+    std::vector<glm::vec2> path;
+    if (points.size() < 2 || !(length > 0.0f))
+    {
+        return path;
+    }
+    const std::vector<glm::vec2> dense = SampleCurve(points, curve, DENSE_SAMPLES);
+    if (dense.size() < 2)
+    {
+        return path;
+    }
+    std::vector<float> distances(dense.size(), 0.0f);
+    for (size_t i = 1; i < dense.size(); ++i)
+    {
+        distances[i] = distances[i - 1] + glm::distance(dense[i - 1], dense[i]);
+    }
+    const float total = distances.back();
+    if (total <= 1e-4f)
+    {
+        return path;
+    }
+    // The way the curve is heading at its end, to carry on that way: its last stretch with any
+    // length (a repeated point, a sharp corner, has none). Up, if it has none.
+    glm::vec2 heading{0.0f, -1.0f};
+    for (size_t i = dense.size() - 1; i > 0; --i)
+    {
+        const glm::vec2 step = dense[i] - dense[i - 1];
+        if (glm::length(step) > 1e-5f)
+        {
+            heading = glm::normalize(step);
+            break;
+        }
+    }
+
+    path.reserve(GLIDE_PATH_POINTS);
+    // From the far end in, as the note travels.
+    for (uint32_t s = GLIDE_PATH_POINTS; s-- > 0;)
+    {
+        const float target = static_cast<float>(s) / static_cast<float>(GLIDE_PATH_POINTS - 1) * length;
+        if (target > total)
+        {
+            path.push_back(dense.back() + (heading * (target - total)));
+            continue;
+        }
+        const auto segment = static_cast<size_t>(
+            std::clamp<std::ptrdiff_t>(std::lower_bound(distances.begin(), distances.end(), target) - distances.begin(),
+                                       1, static_cast<std::ptrdiff_t>(dense.size()) - 1));
+        const float span = distances[segment] - distances[segment - 1];
+        const float t = span < 1e-6f ? 0.0f : std::clamp((target - distances[segment - 1]) / span, 0.0f, 1.0f);
+        path.push_back(dense[segment - 1] + ((dense[segment] - dense[segment - 1]) * t));
+    }
+    return path;
 }
 
 std::vector<glm::vec2> SampleCurve(const std::vector<glm::vec2>& points, CurveType curve)

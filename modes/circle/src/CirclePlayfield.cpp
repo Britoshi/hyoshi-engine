@@ -32,6 +32,9 @@ enum class Shape : uint32_t
     Ring,
     // A white chevron pointing right, outlined dark: a slider's reverse arrow.
     Arrow,
+    // A square on its corner, as an outline and filled: slides' and flicks' heads.
+    Diamond,
+    DiamondFill,
     Count
 };
 
@@ -89,6 +92,15 @@ constexpr float BODY_SHADE = 0.45f;
 // Notes due together glow this much larger than a note, this strongly.
 constexpr float SHINE_SCALE = 1.3f;
 constexpr float SHINE_ALPHA = 0.75f;
+// Slides' and flicks' heads are diamonds in their own colors, whatever their combo's, over a dark
+// fill; slides smaller, to tell them apart in a stack.
+constexpr Color SLIDE_TINT{255, 230, 51, 255};
+constexpr Color FLICK_TINT{255, 184, 77, 255};
+constexpr Color DIAMOND_FILL_TINT{0, 0, 0, 120};
+constexpr float SLIDE_SCALE = 0.78f;
+// A diamond's outline is this much of its half-size thick, measured along its diagonals.
+constexpr float DIAMOND_LINE = 0.32f;
+constexpr float DIAMOND_NUMBER_SCALE = 0.8f;
 constexpr float FOLLOW_CIRCLE_SCALE = FOLLOW_RADIUS_SCALE;
 constexpr Color SPINNER_TINT{255, 255, 255, 170};
 constexpr float SPINNER_SIZE = 0.8f * PLAYFIELD_HEIGHT;
@@ -163,6 +175,15 @@ glm::vec4 ShapeTexel(Shape shape, glm::vec2 point)
         const float gray = glm::mix(0.08f, 1.0f, white);
         return {gray, gray, gray, std::max(white, outlineAlpha * Coverage(halfWidth + outline - fromLines))};
     }
+    case Shape::Diamond:
+    case Shape::DiamondFill:
+    {
+        // Distances to its edges, square on to them.
+        const float diagonal = std::abs(point.x) + std::abs(point.y);
+        const float outside = (SHAPE_RADIUS - diagonal) / std::numbers::sqrt2_v<float>;
+        const float inside = (diagonal - (SHAPE_RADIUS * (1.0f - DIAMOND_LINE))) / std::numbers::sqrt2_v<float>;
+        return {1.0f, 1.0f, 1.0f, Coverage(shape == Shape::Diamond ? std::min(outside, inside) : outside)};
+    }
     case Shape::Count:
         break;
     }
@@ -207,17 +228,25 @@ float Ratio(SongTimeUs part, SongTimeUs whole)
     return whole > 0 ? static_cast<float>(part) / static_cast<float>(whole) : 1.0f;
 }
 
-// Fades in over the approach and out after the note's time.
+// Fades in over the approach (a gliding note as it says) and out after the note's time.
 float GetNoteAlpha(const CircleNote& note, SongTimeUs time, SongTimeUs approachUs)
 {
     const SongTimeUs untilHit = note.Time - time;
-    if (untilHit > approachUs)
-    {
-        return 0.0f;
-    }
     if (untilHit < 0)
     {
         return Saturate(1.0f - Ratio(-untilHit, FADE_OUT_US));
+    }
+    if (note.IsGliding())
+    {
+        if (time < note.GlideAppearTime)
+        {
+            return 0.0f;
+        }
+        return note.GlideFadeUs > 0 ? Saturate(Ratio(time - note.GlideAppearTime, note.GlideFadeUs)) : 1.0f;
+    }
+    if (untilHit > approachUs)
+    {
+        return 0.0f;
     }
     return Saturate((1.0f - Ratio(untilHit, approachUs)) / FADE_IN_FRACTION);
 }
@@ -227,10 +256,19 @@ bool IsStruck(const CircleJudge& judge, uint32_t note)
     return judge.GetNoteState(note) == NoteState::Hit;
 }
 
-glm::vec2 GetHeadPosition(const CircleChart& chart, const CircleNote& note)
+bool IsDiamond(const CircleNote& note)
 {
-    return note.Type == NoteType::Slider && note.PathPointCount >= 2 ? GetPathPosition(chart, note, 0.0f)
-                                                                     : note.GetStackedPosition();
+    return note.Head != HeadKind::Press;
+}
+
+Color GetDiamondTint(const CircleNote& note)
+{
+    return note.Head == HeadKind::Slide ? SLIDE_TINT : FLICK_TINT;
+}
+
+float GetHeadScale(const CircleNote& note)
+{
+    return note.Head == HeadKind::Slide ? SLIDE_SCALE : 1.0f;
 }
 
 // Where a note is left from: a slider's ball at its end, or the note itself.
@@ -388,6 +426,11 @@ void CirclePlayfield::Reset(const CircleChart& chart)
     firstNote = 0;
     firstFollowPoint = 0;
     lastTime = INT64_MIN;
+    longestLeadUs = 0;
+    for (const CircleNote& note : chart.Notes)
+    {
+        longestLeadUs = std::max(longestLeadUs, note.Time - GetAppearTime(chart, note));
+    }
     BuildFollowPoints(chart);
 }
 
@@ -447,8 +490,10 @@ void CirclePlayfield::Draw(renderer::SpriteBatch& sprites, renderer::TextRendere
     {
         ++firstNote;
     }
+    // Up to the last note that could be showing: gliding notes can come in long before their approach.
+    const SongTimeUs lead = std::max(longestLeadUs, frame.ApproachUs);
     auto end = static_cast<uint32_t>(firstNote);
-    while (end < notes.size() && notes[end].Time - frame.ApproachUs <= time)
+    while (end < notes.size() && notes[end].Time - lead <= time)
     {
         ++end;
     }
@@ -569,7 +614,7 @@ void CirclePlayfield::DrawSliderBody(const Frame& frame, uint32_t index) const
             (ball.IsForward ? start : end) = ball.Progress;
         }
     }
-    else
+    else if (!frame.Style.IsEditorView)
     {
         end = Saturate((SNAKE_START - Ratio(untilHit, frame.ApproachUs)) * SNAKE_SPEED);
     }
@@ -615,7 +660,8 @@ void CirclePlayfield::DrawReverseArrows(const Frame& frame, uint32_t index) cons
     }
     const bool isActive = untilHit <= 0;
     // The last pass has none, so the body is whole while there are any; it only snakes in.
-    const bool isSnakedIn = isActive || (SNAKE_START - Ratio(untilHit, frame.ApproachUs)) * SNAKE_SPEED >= 1.0f;
+    const bool isSnakedIn =
+        isActive || frame.Style.IsEditorView || (SNAKE_START - Ratio(untilHit, frame.ApproachUs)) * SNAKE_SPEED >= 1.0f;
     bool isArrowAtEnd = false;
     bool isArrowAtStart = false;
     for (uint32_t pass = isActive ? GetBallProgress(note, frame.Time).Pass : 0; pass + 1 < passes; ++pass)
@@ -651,14 +697,20 @@ void CirclePlayfield::DrawHead(const Frame& frame, uint32_t index) const
     {
         return;
     }
-    const glm::vec2 head = GetHeadPosition(frame.Chart, note);
+    const glm::vec2 head = GetHeadPositionAt(frame.Chart, note, frame.Time);
     // Due with another: a glow around it.
     if (note.IsSimultaneous)
     {
         frame.DrawShape(Shape::Disc, head, frame.Diameter * SHINE_SCALE,
                         WithAlpha(renderer::SHINE, alpha * SHINE_ALPHA), NOTE_LAYER);
     }
-    if (const std::optional<Color> combo = GetComboColor(frame, note))
+    if (IsDiamond(note))
+    {
+        const float size = frame.Diameter * GetHeadScale(note);
+        frame.DrawShape(Shape::DiamondFill, head, size, WithAlpha(DIAMOND_FILL_TINT, alpha), NOTE_LAYER);
+        frame.DrawShape(Shape::Diamond, head, size, WithAlpha(GetDiamondTint(note), alpha), NOTE_LAYER);
+    }
+    else if (const std::optional<Color> combo = GetComboColor(frame, note))
     {
         // A dark halo, the circle in its color, and a light rim: readable on any background.
         frame.DrawShape(Shape::Disc, head, frame.Diameter * HALO_SCALE, WithAlpha(HALO_TINT, alpha), NOTE_LAYER);
@@ -671,8 +723,10 @@ void CirclePlayfield::DrawHead(const Frame& frame, uint32_t index) const
     }
     if (frame.Style.AreComboNumbersShown)
     {
-        frame.DrawText(std::to_string(note.ComboNumber), head, frame.Diameter * NUMBER_SIZE,
-                       WithAlpha(NUMBER_TINT, alpha), NOTE_LAYER);
+        // Smaller in a diamond, which has less room inside than a circle.
+        const float size =
+            frame.Diameter * NUMBER_SIZE * GetHeadScale(note) * (IsDiamond(note) ? DIAMOND_NUMBER_SCALE : 1.0f);
+        frame.DrawText(std::to_string(note.ComboNumber), head, size, WithAlpha(NUMBER_TINT, alpha), NOTE_LAYER);
     }
 }
 
@@ -693,21 +747,33 @@ void CirclePlayfield::DrawSliderBall(const Frame& frame, uint32_t index) const
     }
 }
 
+// Over the note's own lead (CircleNote::ApproachLeadUs), fading in over its own time too, never
+// before the note shows; on a gliding note, it rides along.
 void CirclePlayfield::DrawApproach(const Frame& frame, uint32_t index) const
 {
     const CircleNote& note = frame.Chart.Notes[index];
     const SongTimeUs untilHit = note.Time - frame.Time;
-    if (note.Type == NoteType::Spinner || IsStruck(frame.Judge, index) || untilHit < 0 || untilHit > frame.ApproachUs)
+    const SongTimeUs lead = note.ApproachLeadUs > 0 ? note.ApproachLeadUs : frame.ApproachUs;
+    if (note.Type == NoteType::Spinner || note.ApproachLeadUs < 0 || IsStruck(frame.Judge, index) || untilHit < 0 ||
+        untilHit > lead)
     {
         return;
     }
-    const float scale = 1.0f + (Ratio(untilHit, frame.ApproachUs) * (APPROACH_START_SCALE - 1.0f));
-    const float alpha = GetNoteAlpha(note, frame.Time, frame.ApproachUs);
-    const glm::vec2 head = GetHeadPosition(frame.Chart, note);
-    const std::optional<Color> combo = GetComboColor(frame, note);
-    if (!combo)
+    const float scale = 1.0f + (Ratio(untilHit, lead) * (APPROACH_START_SCALE - 1.0f));
+    const SongTimeUs fade =
+        note.ApproachFadeUs > 0 ? note.ApproachFadeUs : std::llround(static_cast<double>(lead) * FADE_IN_FRACTION);
+    const float alpha =
+        std::min(GetNoteAlpha(note, frame.Time, frame.ApproachUs), Saturate(Ratio(lead - untilHit, fade)));
+    if (alpha <= 0.0f)
     {
-        frame.DrawShape(Shape::Ring, head, frame.Diameter * scale, WithAlpha(NOTE_TINT, alpha), APPROACH_LAYER);
+        return;
+    }
+    const glm::vec2 head = GetHeadPositionAt(frame.Chart, note, frame.Time);
+    const std::optional<Color> combo = GetComboColor(frame, note);
+    if (IsDiamond(note) || !combo)
+    {
+        const Color tint = IsDiamond(note) ? GetDiamondTint(note) : NOTE_TINT;
+        frame.DrawShape(Shape::Ring, head, frame.Diameter * scale, WithAlpha(tint, alpha), APPROACH_LAYER);
         return;
     }
     // Its combo's color toward white, over a dark ring just outside it.
@@ -728,6 +794,10 @@ void CirclePlayfield::DrawSpinner(const Frame& frame, uint32_t index) const
         return;
     }
     const float alpha = frame.Time < note.Time ? GetNoteAlpha(note, frame.Time, frame.ApproachUs) : 1.0f;
+    if (alpha <= 0.0f)
+    {
+        return;
+    }
     const float size = SPINNER_SIZE * frame.Layout.Scale;
     frame.DrawShape(Shape::Ring, note.Position, size, WithAlpha(SPINNER_TINT, alpha), BODY_LAYER);
     const float left = 1.0f - Saturate(Ratio(frame.Time - note.Time, note.EndTime - note.Time));
@@ -771,22 +841,35 @@ void CirclePlayfield::DrawTicks(const Frame& frame, uint32_t index, float start,
 void CirclePlayfield::DrawFeedback(const Frame& frame, uint32_t index) const
 {
     const Feedback& result = feedback[index];
+    if (result.Time == INT64_MIN)
+    {
+        return;
+    }
     const CircleNote& note = frame.Chart.Notes[index];
+    // Where it was then: a gliding note struck early hadn't quite landed.
+    const glm::vec2 head = GetHeadPositionAt(frame.Chart, note, result.Time);
     const SongTimeUs popAge = frame.Time - result.PopTime;
     if (result.PopTime != INT64_MIN && popAge >= 0 && popAge < POP_US)
     {
         const float grown = Ratio(popAge, POP_US);
-        frame.DrawShape(Shape::HitCircle, GetHeadPosition(frame.Chart, note),
-                        frame.Diameter * (1.0f + (POP_GROWTH * grown)),
-                        WithAlpha(GetComboColor(frame, note).value_or(NOTE_TINT), 1.0f - grown), FEEDBACK_LAYER);
+        const float size = frame.Diameter * GetHeadScale(note) * (1.0f + (POP_GROWTH * grown));
+        if (IsDiamond(note))
+        {
+            frame.DrawShape(Shape::DiamondFill, head, size, WithAlpha(GetDiamondTint(note), 1.0f - grown),
+                            FEEDBACK_LAYER);
+        }
+        else
+        {
+            frame.DrawShape(Shape::HitCircle, head, size,
+                            WithAlpha(GetComboColor(frame, note).value_or(NOTE_TINT), 1.0f - grown), FEEDBACK_LAYER);
+        }
     }
 
     const SongTimeUs age = frame.Time - result.Time;
-    if (result.Time == INT64_MIN || age < 0 || age >= MARK_US)
+    if (age < 0 || age >= MARK_US)
     {
         return;
     }
-    const glm::vec2 head = GetHeadPosition(frame.Chart, note);
     const float alpha = 1.0f - Ratio(age, MARK_US);
     const float size = frame.Diameter * MARK_SIZE;
     const Color tint = WithAlpha(GetMarkTint(result.Result), alpha);

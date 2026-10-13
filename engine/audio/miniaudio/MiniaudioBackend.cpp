@@ -371,6 +371,11 @@ DspFrame MiniaudioBackend::GetMusicFrameCount() const
     return musicStream ? musicStream->GetFrameCount() : 0;
 }
 
+void MiniaudioBackend::SetMusicRate(double rate)
+{
+    Submit({.Type = AudioCommandType::SetMusicRate, .Rate = rate});
+}
+
 AudioClockSnapshot MiniaudioBackend::GetClockSnapshot() const
 {
     return mixer ? mixer->GetSnapshot() : AudioClockSnapshot{};

@@ -26,6 +26,25 @@ PcmBuffer MakeConstant(DspFrame frames, int16_t value)
     return buffer;
 }
 
+// Frame i holds i, up to 20000, in both channels.
+PcmBuffer MakeRamp(DspFrame frames)
+{
+    PcmBuffer buffer;
+    buffer.SampleRate = RATE;
+    for (DspFrame i = 0; i < frames; ++i)
+    {
+        const auto value = static_cast<int16_t>(i % 20'000);
+        buffer.Samples.push_back(value);
+        buffer.Samples.push_back(value);
+    }
+    return buffer;
+}
+
+float RampAt(double position)
+{
+    return static_cast<float>(position / 32768.0);
+}
+
 // Renders `frames` frames in fixed blocks, returning the left channel.
 std::vector<float> RenderLeft(Mixer& mixer, DspFrame frames, hyoshi::HostTimeNs& time)
 {
@@ -105,6 +124,78 @@ TEST_CASE("Pausing holds the music and scheduled voices; seeking cancels them")
     CHECK(mixer.GetSnapshot().MusicFrame == 5000);
     CHECK(mixer.GetSnapshot().SeekGeneration == 2);
     CHECK(mixer.GetStats().ActiveVoices == 0);
+}
+
+TEST_CASE("Mixer plays music at a rate, between its frames")
+{
+    const PcmBuffer ramp = MakeRamp(RATE);
+    Mixer mixer(RATE, 4);
+    mixer.Submit({.Type = AudioCommandType::SetMusic, .Buffer = &ramp});
+    mixer.Submit({.Type = AudioCommandType::SetMusicRate, .Rate = 2.0});
+    mixer.Submit({.Type = AudioCommandType::PlayMusic});
+
+    hyoshi::HostTimeNs time = 0;
+    std::vector<float> left = RenderLeft(mixer, BLOCK * 2, time);
+    CHECK(left[10] == doctest::Approx(RampAt(20.0)));
+    CHECK(left[300] == doctest::Approx(RampAt(600.0)));
+    CHECK(mixer.GetSnapshot().MusicFrame == BLOCK * 2);
+    CHECK(mixer.GetSnapshot().MusicRate == 2.0);
+
+    // Half speed: every other frame is halfway between two.
+    mixer.Submit({.Type = AudioCommandType::SetMusicRate, .Rate = 0.5});
+    left = RenderLeft(mixer, BLOCK, time);
+    CHECK(left[0] == doctest::Approx(RampAt(1024.0)));
+    CHECK(left[1] == doctest::Approx(RampAt(1024.5)));
+    CHECK(left[2] == doctest::Approx(RampAt(1025.0)));
+
+    // Back at 1 from part of the way between frames, it plays whole frames again.
+    mixer.Submit({.Type = AudioCommandType::SetMusicRate, .Rate = 0.3});
+    RenderLeft(mixer, BLOCK, time);
+    CHECK(mixer.GetSnapshot().MusicFrame == 1152);
+    mixer.Submit({.Type = AudioCommandType::SetMusicRate, .Rate = 1.0});
+    left = RenderLeft(mixer, BLOCK, time);
+    CHECK(mixer.GetSnapshot().MusicFrame == 1152 + 76);
+    CHECK(mixer.GetSnapshot().MusicRate == 1.0);
+    CHECK(left[0] == doctest::Approx(RampAt(1228.0)));
+    CHECK(left[1] == doctest::Approx(RampAt(1229.0)));
+}
+
+TEST_CASE("Mixer starts a scheduled voice where the music reaches its frame, at any rate")
+{
+    const PcmBuffer silence = MakeConstant(RATE, 0);
+    const PcmBuffer click = MakeConstant(10, 16384);
+
+    Mixer mixer(RATE, 4);
+    mixer.Submit({.Type = AudioCommandType::SetMusic, .Buffer = &silence});
+    mixer.Submit({.Type = AudioCommandType::SetMusicRate, .Rate = 2.0});
+    mixer.Submit({.Type = AudioCommandType::PlayMusic});
+    mixer.Submit({.Type = AudioCommandType::PlayVoice, .Handle = 1, .Frame = 1000, .Buffer = &click});
+
+    hyoshi::HostTimeNs time = 0;
+    const std::vector<float> left = RenderLeft(mixer, 1024, time);
+
+    // The music reaches frame 1000 at frame 500; the click itself plays as it is.
+    CHECK(left[499] == 0.0f);
+    CHECK(left[500] == doctest::Approx(0.5f));
+    CHECK(left[509] == doctest::Approx(0.5f));
+    CHECK(left[510] == 0.0f);
+    CHECK(mixer.GetStats().LateVoices == 0);
+}
+
+TEST_CASE("New music plays at a rate of 1")
+{
+    const PcmBuffer first = MakeConstant(RATE, 0);
+    const PcmBuffer second = MakeConstant(RATE, 0);
+    Mixer mixer(RATE, 4);
+    mixer.Submit({.Type = AudioCommandType::SetMusic, .Buffer = &first});
+    mixer.Submit({.Type = AudioCommandType::SetMusicRate, .Rate = 1.5});
+    mixer.Submit({.Type = AudioCommandType::SetMusic, .Buffer = &second});
+    mixer.Submit({.Type = AudioCommandType::PlayMusic});
+
+    hyoshi::HostTimeNs time = 0;
+    RenderLeft(mixer, BLOCK * 2, time);
+    CHECK(mixer.GetSnapshot().MusicRate == 1.0);
+    CHECK(mixer.GetSnapshot().MusicFrame == BLOCK);
 }
 
 TEST_CASE("Music stops at its end and bus volumes scale it")

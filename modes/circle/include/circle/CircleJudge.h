@@ -21,7 +21,7 @@ enum class CircleAction : uint16_t
     Press,
     // The pointer let go (every button and key up, or the finger lifted).
     Release,
-    // The pointer moved.
+    // The pointer moved, down or not: a pointer crossing a flick fast enough strikes it either way.
     Move,
     // The pointer came down without a press: a finger down for another mode's note, in a game
     // mixing modes. It follows sliders, and strikes nothing.
@@ -54,6 +54,14 @@ enum class NoteState : uint8_t
 //   blocked, and does nothing else, if it comes before that circle's time. After it, the press
 //   strikes its note and every earlier pending circle is missed. Notes at the same time (within
 //   1 ms) are a chord: neither blocks or misses the other.
+// - Heads that aren't pressed (HeadKind) strike as their pointers move, as a press does but always
+//   a Great, untimed. A slide strikes when a pointer down is on it, from its time to the end of its
+//   window: when a pointer presses (one that strikes or is blocked doesn't), moves, or touches
+//   there, or at its time for a pointer already there. A flick strikes when a pointer, down or
+//   not, moves across it within its window at its speed or faster: how far the pointer went over
+//   the last FLICK_SPEED_WINDOW_US (staying where it last was between actions), once it's been
+//   tracked for half that since it last let go. A flick is blocked as a press is. Neither blocks
+//   later notes, nor is missed by one struck after it: it keeps its window.
 // - A note not struck by the end of its Bad window is missed. Spinners aren't judged.
 // - Sliders are judged in parts (CircleChart::SliderParts), each an event of its own
 //   (JudgmentEvent::Part), with no result for the slider itself. The head is graded by timing as a
@@ -118,10 +126,19 @@ public:
     }
 
 private:
+    struct Sample
+    {
+        SongTimeUs Time = 0;
+        glm::vec2 Position{0.0f};
+    };
+
     struct Pointer
     {
         glm::vec2 Position{0.0f};
         bool IsDown = false;
+        // Where it's been since it last let go, over the last FLICK_SPEED_WINDOW_US (and the
+        // place it was at the start of that).
+        std::vector<Sample> Track;
     };
 
     // What a press at `position` at a time strikes, if anything.
@@ -131,13 +148,14 @@ private:
         bool IsBlocked = false;
     };
 
-    // Something due at a time: a note missed at the end of its window, a slider starting, or a
-    // slider part reached.
+    // Something due at a time: a note missed at the end of its window, a slider starting, a slider
+    // part reached, or a slide's time, struck by a pointer already on it.
     enum class CheckType : uint8_t
     {
         Miss,
         SliderStart,
-        SliderPart
+        SliderPart,
+        SlideTime
     };
     struct Check
     {
@@ -149,11 +167,25 @@ private:
     void RunCheck(const Check& check, std::vector<rhythm::JudgmentEvent>& events);
 
     std::optional<Target> FindTarget(glm::vec2 position, SongTimeUs at) const;
-    void Press(uint32_t pointer, glm::vec2 position, std::vector<rhythm::JudgmentEvent>& events);
+    // Whether an earlier circle keeps a note from being struck now (note lock).
+    bool IsBlocked(uint32_t note, SongTimeUs at) const;
+    // Whether the press struck a note or was blocked.
+    bool Press(glm::vec2 position, std::vector<rhythm::JudgmentEvent>& events);
+    // Slides under a pointer down at `position`, and flicks it crossed coming from `from`.
+    void Slide(glm::vec2 position, std::vector<rhythm::JudgmentEvent>& events);
+    void Flick(const Pointer& pointer, glm::vec2 from, std::vector<rhythm::JudgmentEvent>& events);
+    // Adds where the pointer is now to its track, keeping only what its speed needs.
+    static void AddSample(Pointer& pointer, SongTimeUs at);
+    // Playfield units per second, over the last FLICK_SPEED_WINDOW_US; 0 until it's been tracked
+    // for half that.
+    static float GetSpeed(const Pointer& pointer);
+    // Strikes a head with a result: a circle's, or a slider's, judging the parts it's passed.
+    void Strike(uint32_t note, glm::vec2 position, rhythm::Judgment result, int64_t errorUs, bool isTimed,
+                std::vector<rhythm::JudgmentEvent>& events);
     void MissCirclesBefore(uint32_t note, std::vector<rhythm::JudgmentEvent>& events);
-    // A circle's result, or a slider head's.
-    void Judge(uint32_t note, rhythm::Judgment result, int64_t errorUs, NoteState state, SongTimeUs eventTime,
-               std::vector<rhythm::JudgmentEvent>& events);
+    // A circle's result.
+    void Judge(uint32_t note, rhythm::Judgment result, int64_t errorUs, bool isTimed, NoteState state,
+               SongTimeUs eventTime, std::vector<rhythm::JudgmentEvent>& events);
     void JudgePart(uint32_t note, uint32_t part, rhythm::Judgment result, int64_t errorUs, bool isTimed,
                    SongTimeUs eventTime, std::vector<rhythm::JudgmentEvent>& events);
     void JudgePassedParts(uint32_t note, glm::vec2 position, std::vector<rhythm::JudgmentEvent>& events);
@@ -181,13 +213,16 @@ private:
     std::vector<bool> started;
     std::vector<bool> following;
     std::vector<uint32_t> nextPart;
+    // Slides: their time has been checked for pointers already on them.
+    std::vector<bool> slideChecked;
     std::vector<Pointer> pointers;
     SongTimeUs time = INT64_MIN;
     uint32_t unfinishedNotes = 0;
     uint32_t firstActive = 0;
 };
 
-// Perfectly timed and aimed actions: a pointer moves onto each note and presses on time, follows
+// Perfectly timed and aimed actions: a pointer moves onto each note and presses on time (sweeps
+// across a flick, the way from the note before, and touches down if it's a slider's), follows
 // sliders (on every part), and lets go shortly after, or when the slider ends. Each note takes
 // the lowest pointer not busy with another, so chords and notes during a slider work. For demos
 // and tests.
