@@ -112,6 +112,9 @@ public:
     void SetMusicRate(double /*rate*/) override
     {
     }
+    void SetMusicLowPass(float /*cutoffHz*/) override
+    {
+    }
 
     int64_t SeekMusic(DspFrame /*frame*/) override
     {

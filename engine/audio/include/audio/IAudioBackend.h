@@ -56,6 +56,9 @@ public:
     // Plays the music faster or slower, its pitch with it (a tape sped up), as an editor previews a
     // chart. Song time follows: snapshots report the rate. New music plays at 1.
     virtual void SetMusicRate(double rate) = 0;
+    // Muffles the music, not the voices, with a low-pass filter at this cutoff in Hz, as music
+    // behind a song that's loading might be; 0 turns it off. New music plays without it.
+    virtual void SetMusicLowPass(float cutoffHz) = 0;
 
     // Timing contract for the rhythm core.
     virtual AudioClockSnapshot GetClockSnapshot() const = 0;

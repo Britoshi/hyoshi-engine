@@ -376,6 +376,11 @@ void MiniaudioBackend::SetMusicRate(double rate)
     Submit({.Type = AudioCommandType::SetMusicRate, .Rate = rate});
 }
 
+void MiniaudioBackend::SetMusicLowPass(float cutoffHz)
+{
+    Submit({.Type = AudioCommandType::SetMusicLowPass, .CutoffHz = cutoffHz});
+}
+
 AudioClockSnapshot MiniaudioBackend::GetClockSnapshot() const
 {
     return mixer ? mixer->GetSnapshot() : AudioClockSnapshot{};

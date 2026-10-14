@@ -839,6 +839,11 @@ bool Platform::IsPointerOverWindow() const
     return window != nullptr && SDL_GetMouseFocus() == window;
 }
 
+bool Platform::IsWindowFocused() const
+{
+    return window != nullptr && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+}
+
 const std::string& Platform::GetUserDataPath() const
 {
     return userDataPath;

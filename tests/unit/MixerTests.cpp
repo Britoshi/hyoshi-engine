@@ -198,6 +198,47 @@ TEST_CASE("New music plays at a rate of 1")
     CHECK(mixer.GetSnapshot().MusicFrame == BLOCK);
 }
 
+TEST_CASE("A low-pass muffles the music alone, until new music")
+{
+    // The highest pitch there is: each frame the other way from the last, at half of full scale.
+    PcmBuffer buzz;
+    buzz.SampleRate = RATE;
+    for (DspFrame i = 0; i < RATE; ++i)
+    {
+        const int16_t value = i % 2 == 0 ? 16384 : -16384;
+        buzz.Samples.push_back(value);
+        buzz.Samples.push_back(value);
+    }
+    const PcmBuffer hold = MakeConstant(BLOCK * 4, 8192);
+    const auto loudest = [](const std::vector<float>& samples, size_t from)
+    {
+        float most = 0.0f;
+        for (size_t i = from; i < samples.size(); ++i)
+        {
+            most = std::max(most, std::abs(samples[i]));
+        }
+        return most;
+    };
+
+    Mixer mixer(RATE, 4);
+    mixer.Submit({.Type = AudioCommandType::SetMusic, .Buffer = &buzz});
+    mixer.Submit({.Type = AudioCommandType::SetMusicLowPass, .CutoffHz = 400.0f});
+    mixer.Submit({.Type = AudioCommandType::PlayMusic});
+    hyoshi::HostTimeNs time = 0;
+    CHECK(loudest(RenderLeft(mixer, BLOCK * 2, time), BLOCK) < 0.01f);
+
+    // A voice isn't muffled: it adds its own level on the muffled music.
+    mixer.Submit({.Type = AudioCommandType::PlayVoice, .Handle = 1, .Frame = Mixer::NOT_SCHEDULED, .Buffer = &hold});
+    const std::vector<float> withVoice = RenderLeft(mixer, BLOCK, time);
+    CHECK(withVoice[BLOCK / 2] == doctest::Approx(0.25f).epsilon(0.04));
+
+    // New music plays without it.
+    mixer.Submit({.Type = AudioCommandType::SetMusic, .Buffer = &buzz});
+    mixer.Submit({.Type = AudioCommandType::PlayMusic});
+    RenderLeft(mixer, BLOCK * 4, time);
+    CHECK(loudest(RenderLeft(mixer, BLOCK, time), 0) == doctest::Approx(0.5f));
+}
+
 TEST_CASE("Music stops at its end and bus volumes scale it")
 {
     const PcmBuffer music = MakeConstant(300, 16384);

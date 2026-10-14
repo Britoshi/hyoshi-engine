@@ -207,6 +207,10 @@ public:
     // The mouse is over the window, so a cursor drawn by the game belongs there.
     bool IsPointerOverWindow() const;
 
+    // The window has the keyboard's focus: false while another window has it (a desktop's player
+    // has switched away).
+    bool IsWindowFocused() const;
+
     // Writable per-user directory for settings and caches, ending in a path separator.
     const std::string& GetUserDataPath() const;
 

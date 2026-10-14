@@ -22,6 +22,7 @@ enum class AudioCommandType : uint8_t
     PauseMusic,
     SeekMusic,
     SetMusicRate,
+    SetMusicLowPass,
     PlayVoice,
     StopVoice,
     SetBusVolume,
@@ -44,6 +45,8 @@ struct AudioCommand
     int64_t StreamEpoch = 0;
     // SetMusicRate: music frames per frame rendered.
     double Rate = 1.0;
+    // SetMusicLowPass: the cutoff in Hz, or 0 for none.
+    float CutoffHz = 0.0f;
 };
 
 // The engine's custom mixer (DESIGN.md section 11.2), independent of any device so it can run
@@ -56,6 +59,8 @@ struct AudioCommand
 // until then it holds where it is, and snapshots report it as not playing.
 //
 // At a rate other than 1, the music is resampled linearly, which shifts its pitch with its speed.
+// A low-pass (SetMusicLowPass, two one-pole stages) muffles the music alone, before the voices mix
+// in; off, it costs nothing.
 class Mixer
 {
 public:
@@ -103,6 +108,7 @@ private:
     DspFrame GetMusicFramesFor(DspFrame frameCount) const;
     DspFrame RenderMusic(float* output, DspFrame frameCount);
     DspFrame RenderMusicAtRate(float* output, DspFrame frameCount);
+    void FilterMusic(float* output, DspFrame frameCount);
     void SetMusicCursor(DspFrame frame);
     float GetBusGain(Bus bus) const;
     static void MixInto(float* output, const int16_t* source, uint32_t frameCount, float gain);
@@ -122,6 +128,10 @@ private:
     double musicRate = 1.0;
     double musicPhase = 0.0;
     DspFrame musicSkip = 0;
+    // The music's low-pass: each stage's coefficient (0 when off) and each stage's last output, by
+    // channel.
+    float musicLowPass = 0.0f;
+    std::array<float, size_t{PcmBuffer::CHANNELS} * 2> musicLowPassState{};
     bool isMusicPlaying = false;
     // The last callback advanced the music, with no seek, pause, or music change since.
     bool wasMusicAdvancing = false;

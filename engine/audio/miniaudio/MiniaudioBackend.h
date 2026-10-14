@@ -45,6 +45,7 @@ public:
     int64_t SeekMusic(DspFrame frame) override;
     DspFrame GetMusicFrameCount() const override;
     void SetMusicRate(double rate) override;
+    void SetMusicLowPass(float cutoffHz) override;
 
     AudioClockSnapshot GetClockSnapshot() const override;
     int64_t GetEstimatedOutputLatencyUs() const override;

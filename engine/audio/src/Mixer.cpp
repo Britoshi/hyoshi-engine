@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <span>
 
 namespace hyoshi::audio
@@ -83,6 +84,11 @@ void Mixer::Render(float* output, uint32_t frameCount, HostTimeNs callbackTime)
     {
         isMusicPlaying = false;
     }
+    // The low-pass on the music alone: the voices mix in after.
+    if (musicLowPass > 0.0f)
+    {
+        FilterMusic(output, frameCount);
+    }
 
     uint32_t activeVoices = 0;
     for (Voice& voice : voices)
@@ -158,6 +164,7 @@ void Mixer::Apply(const AudioCommand& command)
         stream = command.Stream;
         SetMusicCursor(0);
         musicRate = 1.0;
+        musicLowPass = 0.0f;
         isMusicPlaying = false;
         wasMusicAdvancing = false;
         ++seekGeneration;
@@ -193,6 +200,21 @@ void Mixer::Apply(const AudioCommand& command)
             musicPhase = 0.0;
         }
         break;
+    case AudioCommandType::SetMusicLowPass:
+    {
+        // Off at 0, or at a cutoff too high to change anything.
+        const float cutoff = std::isfinite(command.CutoffHz) ? command.CutoffHz : 0.0f;
+        const auto rate = static_cast<float>(sampleRate);
+        const float coefficient = cutoff > 0.0f && cutoff < rate * 0.45f
+                                      ? 1.0f - std::exp(-2.0f * std::numbers::pi_v<float> * cutoff / rate)
+                                      : 0.0f;
+        if (musicLowPass == 0.0f)
+        {
+            musicLowPassState.fill(0.0f);
+        }
+        musicLowPass = coefficient;
+        break;
+    }
     case AudioCommandType::PlayVoice:
     {
         auto freeVoice = std::find_if(voices.begin(), voices.end(), [](const Voice& v) { return v.Buffer == nullptr; });
@@ -236,6 +258,20 @@ void Mixer::Apply(const AudioCommand& command)
             isMusicPlaying = false;
         }
         break;
+    }
+}
+
+void Mixer::FilterMusic(float* output, DspFrame frameCount)
+{
+    const size_t samples = static_cast<size_t>(frameCount) * PcmBuffer::CHANNELS;
+    for (size_t i = 0; i < samples; ++i)
+    {
+        const size_t channel = i % PcmBuffer::CHANNELS;
+        float& first = musicLowPassState[channel];
+        float& second = musicLowPassState[PcmBuffer::CHANNELS + channel];
+        first += musicLowPass * (output[i] - first);
+        second += musicLowPass * (first - second);
+        output[i] = second;
     }
 }
 

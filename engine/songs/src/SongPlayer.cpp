@@ -135,6 +135,10 @@ void SongPlayer::OnLoaded(hyoshi::Result<int64_t> generation, DspFrame frameCoun
     expectedGeneration = generation.Value();
     pendingCursorFrame = 0;
     isDiscontinuity = true;
+    // New music starts at its first frame once the audio thread has it. Until then the snapshots
+    // describe the music before it, which may still be playing (a menu's preview, behind a song
+    // loading), so the clock holds at the start rather than follow it.
+    clock.ExpectSeek(expectedGeneration, clock.SongTimeForMusicFrame(0, audio.GetSampleRate()));
     // New music plays at 1.
     if (musicRate != 1.0)
     {
