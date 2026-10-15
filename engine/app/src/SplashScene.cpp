@@ -88,11 +88,12 @@ constexpr int32_t SPARK_LAYER = 4;
 constexpr int32_t TEXT_LAYER = 5;
 constexpr int32_t FLASH_LAYER = 6;
 
-// The beats' sounds, made here: a knock for each tile, rising through C major 7, and on the hit a
-// low thump with the chord over it. Their ids are far from any a game picks.
+// The beats' sounds, made here: a knock for each tile, rising through F major 7 (F5 A5 C6 E6), and
+// on the hit a low thump with the chord over it (F3 C4 E4 A4, and E5 on top, softer). Their ids
+// are far from any a game picks.
 constexpr audio::SoundId FIRST_SOUND = 0x5350'4C41'5348'0000;
-constexpr std::array<float, TILE_COUNT> KNOCK_HZ{523.25f, 659.26f, 783.99f, 987.77f};
-constexpr std::array<float, 5> CHORD_HZ{261.63f, 392.0f, 493.88f, 659.26f, 1046.5f};
+constexpr std::array<float, TILE_COUNT> KNOCK_HZ{698.46f, 880.0f, 1046.5f, 1318.51f};
+constexpr std::array<float, 5> CHORD_HZ{174.61f, 261.63f, 329.63f, 440.0f, 659.26f};
 // Sounds start early by the output's delay, less the display's (about a frame), up to a limit.
 constexpr float DISPLAY_DELAY_SECONDS = 0.017f;
 constexpr float MAX_LEAD_SECONDS = 0.12f;
