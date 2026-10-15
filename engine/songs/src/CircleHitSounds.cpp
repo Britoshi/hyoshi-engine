@@ -305,12 +305,14 @@ void CircleHitSounds::Reset()
     nextCue = 0;
 }
 
-void CircleHitSounds::Update(const SongPlayer& player, const circle::CircleJudge& judge, bool isAutoplay, float volume)
+void CircleHitSounds::Update(const SongPlayer& player, const circle::CircleJudge& judge, bool isAutoplaying,
+                             float volume)
 {
     if (audio == nullptr || volume <= 0.0f)
     {
         return;
     }
+    isAutoplay = isAutoplaying;
     const DspFrame earliest = GetEarliestFrame(player);
     const DspFrame horizon =
         earliest + UsToFrames(isAutoplay ? AUTOPLAY_AHEAD_US : FOLLOW_AHEAD_US, audio->GetSampleRate());
@@ -400,7 +402,11 @@ DspFrame CircleHitSounds::GetEarliestFrame(const SongPlayer& player)
 
 DspFrame CircleHitSounds::GetFrame(const Cue& cue, const SongPlayer& player) const
 {
-    return UsToFrames(cue.Time + player.GetClock().ChartOffsetUs, audio->GetSampleRate());
+    if (isAutoplay)
+    {
+        return UsToFrames(cue.Time + player.GetClock().ChartOffsetUs, audio->GetSampleRate());
+    }
+    return player.GetClock().MusicFrameForSongTime(cue.Time, audio->GetSampleRate());
 }
 
 void CircleHitSounds::Play(Cue& cue, float volume, std::optional<DspFrame> frame)

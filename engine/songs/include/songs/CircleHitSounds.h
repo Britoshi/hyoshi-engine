@@ -29,8 +29,11 @@ namespace hyoshi::songs
 // Only what's hit sounds. With autoplay, everything is scheduled on its music frame ahead of time.
 // In play, a circle or a slider's head sounds the moment it's struck (OnJudgment). The other
 // parts are judged once the ball has passed them, too late to sound on time, so a part is scheduled
-// on its frame just before the audio thread gets there if its slider is being followed then; if
-// it's missed after all, it's stopped, and a part that's hit without being scheduled plays at once.
+// just before the audio thread gets there if its slider is being followed then; if it's missed
+// after all, it's stopped, and a part that's hit without being scheduled plays at once. A part is
+// scheduled where a struck one would sound: on the frame the music is at when a perfectly timed hit
+// lands, past the output latency and the player's audio offset (SongClock::MusicFrameForSongTime),
+// not on the part's own frame, which would sound that much earlier than the player's hits.
 class CircleHitSounds
 {
 public:
@@ -81,6 +84,7 @@ private:
     Cue* FindCue(uint32_t note, uint32_t part);
     // The earliest music frame a sound sent now surely reaches the audio thread in time for.
     static DspFrame GetEarliestFrame(const SongPlayer& player);
+    // Where a cue sounds: on its own music frame with autoplay, else where a struck one would.
     DspFrame GetFrame(const Cue& cue, const SongPlayer& player) const;
     void Play(Cue& cue, float volume, std::optional<DspFrame> frame);
 
@@ -93,6 +97,8 @@ private:
     // A note's first cue: a circle's one, or a slider's parts' from the head.
     std::vector<uint32_t> firstCue;
     size_t nextCue = 0;
+    // The last Update was autoplay's.
+    bool isAutoplay = false;
 };
 
 } // namespace hyoshi::songs

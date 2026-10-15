@@ -344,6 +344,47 @@ TEST_CASE("Circle hit sounds: only what's hit sounds, and followed slider parts 
     CHECK(rig.Judge.IsFinished());
 }
 
+TEST_CASE("Circle hit sounds: followed parts sound where struck ones would, past the latency and offset")
+{
+    // A circle long before, then a slider from 2 s to 3 s with a tick halfway.
+    CircleChart chart = MakeChart({Circle(500'000, {100.0f, 100.0f}, 0)}, {hyoshi::circle::HitSound{}});
+    CircleNote slider;
+    slider.Time = 2'000'000;
+    slider.EndTime = 3'000'000;
+    slider.Position = {200.0f, 200.0f};
+    slider.Type = hyoshi::circle::NoteType::Slider;
+    slider.Curve = hyoshi::circle::CurveType::Linear;
+    slider.ControlPointCount = 2;
+    slider.Length = 100.0f;
+    slider.TickDistance = 50.0f;
+    chart.ControlPoints = {{200.0f, 200.0f}, {300.0f, 200.0f}};
+    chart.Notes.push_back(slider);
+    hyoshi::circle::FinishCircleChart(chart);
+
+    // In play, with 30 ms of output latency and a 10 ms offset: a perfect hit on the tick lands when
+    // the music is 40 ms past it, so the tick sounds there, as a struck circle would.
+    Rig rig(chart);
+    rig.Player.GetClock().OutputLatencyUs = 30'000;
+    rig.Player.GetClock().UserAudioOffsetUs = 10'000;
+    rig.Act(CircleAction::Press, 2'000'000, {200.0f, 200.0f});
+    rig.Act(CircleAction::Move, 2'470'000, {247.0f, 200.0f});
+    rig.At(2'510'000);
+    std::vector<FakeAudio::Call>& calls = rig.Audio.Calls;
+    REQUIRE(calls.size() == 2);
+    CHECK(calls[1].Type == FakeAudio::CallType::PlayAt);
+    CHECK(calls[1].Frame == hyoshi::UsToFrames(2'540'000, RATE));
+
+    // Autoplay keeps to the music's own frames.
+    Rig autoplay(chart);
+    autoplay.Player.GetClock().OutputLatencyUs = 30'000;
+    autoplay.Audio.Snapshot.MusicFrame = hyoshi::UsToFrames(1'950'000, RATE);
+    autoplay.Player.Update(0);
+    autoplay.Sounds.Update(autoplay.Player, autoplay.Judge, true, 1.0f);
+    REQUIRE(!autoplay.Audio.Calls.empty());
+    CHECK(autoplay.Audio.Calls[0].Type == FakeAudio::CallType::PlayAt);
+    CHECK(autoplay.Audio.Calls[0].Frame == hyoshi::UsToFrames(2'000'000, RATE));
+}
+
 TEST_CASE("Circle hit sounds: the map's files first, any case, and an empty file is silence")
 {
     const std::filesystem::path folder = std::filesystem::temp_directory_path() / "hyoshi-hit-sounds-test";
