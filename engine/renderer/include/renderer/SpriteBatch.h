@@ -41,6 +41,24 @@ constexpr Color WithAlpha(Color color, float alpha)
     return color;
 }
 
+// How every mode's notes flash (their styles' flash, 0 to 1: a game's flash on the beat, as in
+// osu!'s kiai time): at full, their color this far toward white, and a white glow around them this
+// opaque.
+constexpr float FLASH_WHITENING = 0.3f;
+constexpr float FLASH_GLOW_ALPHA = 0.4f;
+
+// The color mixed toward white by `amount` (0 to 1), its alpha kept.
+constexpr Color TowardWhite(Color color, float amount)
+{
+    const float clamped = amount < 0.0f ? 0.0f : (amount > 1.0f ? 1.0f : amount);
+    const auto mix = [clamped](uint8_t channel)
+    {
+        const float value = static_cast<float>(channel);
+        return static_cast<uint8_t>(value + ((255.0f - value) * clamped) + 0.5f);
+    };
+    return {mix(color.R), mix(color.G), mix(color.B), color.A};
+}
+
 struct Sprite
 {
     glm::vec2 Center{0.0f};

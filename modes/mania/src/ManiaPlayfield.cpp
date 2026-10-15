@@ -293,7 +293,10 @@ void ManiaPlayfield::Draw(renderer::SpriteBatch& sprites, glm::vec2 canvas, cons
         }
 
         const bool isMissed = state == NoteState::Missed;
-        const Color color = WithAlpha(GetLaneColor(note.Lane, laneCount, style), isMissed ? 0.3f : 1.0f);
+        const float flash = isMissed ? 0.0f : style.NoteFlash;
+        const Color color = WithAlpha(
+            renderer::TowardWhite(GetLaneColor(note.Lane, laneCount, style), flash * renderer::FLASH_WHITENING),
+            isMissed ? 0.3f : 1.0f);
         const float x = left + (static_cast<float>(note.Lane) * style.LaneWidth) + 6.0f;
         const float noteWidth = style.LaneWidth - 12.0f;
 
@@ -323,6 +326,13 @@ void ManiaPlayfield::Draw(renderer::SpriteBatch& sprites, glm::vec2 canvas, cons
                 sprites.DrawRect({x - SHINE_MARGIN, headY - (style.NoteHeight * 0.5f) - SHINE_MARGIN},
                                  {noteWidth + (SHINE_MARGIN * 2.0f), style.NoteHeight + (SHINE_MARGIN * 2.0f)},
                                  WithAlpha(renderer::SHINE, SHINE_ALPHA * (isMissed ? 0.3f : 1.0f)), NOTE_LAYER);
+            }
+            // Flashing: a white glow around it.
+            if (flash > 0.0f)
+            {
+                sprites.DrawRect({x - SHINE_MARGIN, headY - (style.NoteHeight * 0.5f) - SHINE_MARGIN},
+                                 {noteWidth + (SHINE_MARGIN * 2.0f), style.NoteHeight + (SHINE_MARGIN * 2.0f)},
+                                 WithAlpha(renderer::WHITE, flash * renderer::FLASH_GLOW_ALPHA), NOTE_LAYER);
             }
             sprites.DrawRect({x, headY - (style.NoteHeight * 0.5f)}, {noteWidth, style.NoteHeight}, color, NOTE_LAYER);
         }
@@ -414,7 +424,9 @@ void ManiaPlayfield::DrawTrack(renderer::SpriteBatch& sprites, glm::vec2 canvas,
             continue;
         }
         const float alpha = state == NoteState::Missed ? 0.3f : 1.0f;
-        const Color color = GetLaneColor(note.Lane, laneCount, style);
+        const float flash = state == NoteState::Missed ? 0.0f : style.NoteFlash;
+        const Color color =
+            renderer::TowardWhite(GetLaneColor(note.Lane, laneCount, style), flash * renderer::FLASH_WHITENING);
         const float left = laneLeft(note.Lane) + 6.0f;
         const float right = laneLeft(note.Lane) + style.LaneWidth - 6.0f;
         if (note.IsHold())
@@ -433,6 +445,14 @@ void ManiaPlayfield::DrawTrack(renderer::SpriteBatch& sprites, glm::vec2 canvas,
             track.DrawQuad(sprites, left - SHINE_MARGIN, right + SHINE_MARGIN, head - halfHeight - alongMargin,
                            head + halfHeight + alongMargin,
                            WithAlpha(renderer::SHINE, SHINE_ALPHA * alpha * fadeIn(head)), NOTE_LAYER);
+        }
+        // Flashing: a white glow around it.
+        if (flash > 0.0f)
+        {
+            const float alongMargin = toAlong(SHINE_MARGIN);
+            track.DrawQuad(sprites, left - SHINE_MARGIN, right + SHINE_MARGIN, head - halfHeight - alongMargin,
+                           head + halfHeight + alongMargin,
+                           WithAlpha(renderer::WHITE, flash * renderer::FLASH_GLOW_ALPHA * fadeIn(head)), NOTE_LAYER);
         }
         track.DrawQuad(sprites, left, right, head - halfHeight, head + halfHeight,
                        WithAlpha(color, alpha * fadeIn(head)), NOTE_LAYER);

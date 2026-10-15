@@ -332,6 +332,26 @@ TEST_CASE("osu!standard import: combo colors in order, each new combo the next p
     CHECK(chart.Notes[5].ComboColor % chart.ComboColors.size() == 1);
 }
 
+TEST_CASE("osu!standard import: kiai time from red and green lines alike")
+{
+    CHECK(ImportChart(OSU_STANDARD).Info.Kiai.empty());
+    // On at 1 s (red), off at 2 s (green), on at 3 s (a green line after a red one at the same
+    // time, which counts), and still on (effects 9: kiai and the omitted bar line) at the end.
+    const std::string text = WithLine(OSU_STANDARD, "1000,500,4,1,0,100,1,0\n3000,-50,4,1,0,100,0,0\n",
+                                      "1000,500,4,1,0,100,1,1\n"
+                                      "2000,-100,4,1,0,100,0,0\n"
+                                      "3000,-50,4,1,0,100,0,1\n"
+                                      "3000,500,4,1,0,100,1,0\n"
+                                      "5500,-50,4,1,0,100,0,9\n");
+    const CircleChart chart = ImportChart(text);
+    REQUIRE(chart.Info.Kiai.size() == 2);
+    CHECK(chart.Info.Kiai[0].Start == 1'000'000);
+    CHECK(chart.Info.Kiai[0].End == 2'000'000);
+    // The last runs to the last note's end, the circle at 6 s.
+    CHECK(chart.Info.Kiai[1].Start == 3'000'000);
+    CHECK(chart.Info.Kiai[1].End == 6'000'000);
+}
+
 TEST_CASE("osu!standard import: a red line resets slider velocity")
 {
     // 2x from 2 s, so the first slider takes half a beat. A red line at 2.9 s puts the second back

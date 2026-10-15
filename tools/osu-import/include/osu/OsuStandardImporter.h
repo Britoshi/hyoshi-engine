@@ -24,6 +24,8 @@ namespace hyoshi::osu
 //   OverallDifficulty, HPDrainRate, SliderMultiplier, SliderTickRate, and StackLeniency (from
 //   [General], 0.7 when missing).
 // - Timing: every red line becomes a timing point; slider velocity goes to ScrollVelocity.
+// - Kiai time: from every line's effects (bit 0), red and green, to Info.Kiai; one on at the
+//   end runs to the last note's end.
 // - Hit sounds: every line's sample set, custom sample index, and volume become sample points (a
 //   set of 0 takes [General] SampleSet), and each note's hit sound bits and hitSample field its
 //   HitSound; a slider gets one for its body and one for each edge, from edgeSounds and edgeSets.

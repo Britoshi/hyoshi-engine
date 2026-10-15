@@ -39,6 +39,7 @@ struct OsuTimingPoint
     // Hit sound volume, percent.
     int Volume = 100;
     bool IsUninherited = true;
+    bool IsKiai = false;
 };
 
 struct OsuHitObject
@@ -219,6 +220,7 @@ Result<OsuImportResult> ImportOsuMania(std::string_view osuText)
             point.Meter = fields.size() > 2 ? static_cast<int>(ParseNumber(fields[2]).value_or(4.0)) : 4;
             point.Volume = fields.size() > 5 ? static_cast<int>(ParseNumber(fields[5]).value_or(100.0)) : 100;
             point.IsUninherited = fields.size() > 6 ? ParseNumber(fields[6]).value_or(1.0) != 0.0 : true;
+            point.IsKiai = detail::IsKiaiOn(fields);
             if (point.IsUninherited && point.BeatLength <= 0.0)
             {
                 result.Warnings.push_back(where + ": timing point with no tempo, skipped");
@@ -381,6 +383,14 @@ Result<OsuImportResult> ImportOsuMania(std::string_view osuText)
         chart.Notes.push_back(note);
         lanes.push_back(lane);
     }
+
+    std::vector<std::pair<SongTimeUs, bool>> kiai;
+    kiai.reserve(timingPoints.size());
+    for (const OsuTimingPoint& point : timingPoints)
+    {
+        kiai.emplace_back(MsToUs(point.TimeMs, offsetUs), point.IsKiai);
+    }
+    chart.Kiai = detail::MakeKiaiSections(kiai, MsToUs(lastObjectMs, offsetUs));
 
     Result<mania::ManiaChart> maniaChart = mania::BuildManiaChart(std::move(chart), keys, lanes);
     if (!maniaChart)

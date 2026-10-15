@@ -1,5 +1,8 @@
 #pragma once
 
+#include "core/Time.h"
+#include "rhythm/Chart.h"
+
 #include <cctype>
 #include <cerrno>
 #include <charconv>
@@ -8,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // Reading .osu text, shared by the importers.
@@ -71,6 +75,48 @@ inline std::optional<double> ParseNumber(std::string_view text)
     }
 #endif
     return value;
+}
+
+// Whether a timing point's effects (its eighth field) turn kiai time on: bit 0.
+inline bool IsKiaiOn(const std::vector<std::string_view>& fields)
+{
+    return fields.size() > 7 && (static_cast<int64_t>(ParseNumber(fields[7]).value_or(0.0)) & 1) != 0;
+}
+
+// osu!'s kiai time, from every timing point (red and green lines alike) in the order the import
+// sorted them, each a time and whether it turns kiai on: on from a point that turns it on to the
+// next that doesn't. Of points at the same time, the last counts (as osu!lazer's replace each
+// other). A section still on after the last point runs to `endUs`.
+inline std::vector<rhythm::KiaiSection> MakeKiaiSections(const std::vector<std::pair<SongTimeUs, bool>>& points,
+                                                         SongTimeUs endUs)
+{
+    std::vector<rhythm::KiaiSection> sections;
+    std::optional<SongTimeUs> start;
+    for (size_t i = 0; i < points.size(); ++i)
+    {
+        if (i + 1 < points.size() && points[i + 1].first == points[i].first)
+        {
+            continue;
+        }
+        const auto [time, isOn] = points[i];
+        if (isOn && !start)
+        {
+            start = time;
+        }
+        else if (!isOn && start)
+        {
+            if (time > *start)
+            {
+                sections.push_back({*start, time});
+            }
+            start.reset();
+        }
+    }
+    if (start && endUs > *start)
+    {
+        sections.push_back({*start, endUs});
+    }
+    return sections;
 }
 
 } // namespace hyoshi::osu::detail

@@ -59,6 +59,8 @@ struct CirclePlayfieldStyle
     // A chart editor's view: slider bodies whole from when they appear, rather than snaking in,
     // so their shapes can be seen.
     bool IsEditorView = false;
+    // How much the circles and slider heads flash, 0 to 1 (renderer::FLASH_WHITENING).
+    float Flash = 0.0f;
 };
 
 // Draws a circle chart with SpriteBatch (DESIGN.md section 16.4):

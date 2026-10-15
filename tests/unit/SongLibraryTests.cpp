@@ -147,3 +147,33 @@ TEST_CASE("Medleys: a part can play several sources, and circles from several so
     CHECK(notes[2].IsSimultaneous);
     CHECK_FALSE(notes[3].IsSimultaneous);
 }
+
+TEST_CASE("Medleys: each source's kiai time, on the medley's clock and kept to its parts")
+{
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    const fs::path folder = fs::temp_directory_path() / ("hyoshi-medley-kiai-test-" + std::to_string(stamp));
+    fs::create_directories(folder);
+    const auto withTiming = [](std::string text, const std::string& timing)
+    {
+        const std::string plain = "0,500,4,1,0,100,1,0\n";
+        return text.replace(text.find(plain), plain.size(), timing);
+    };
+    // A's kiai from 0 to 1.4 s, though it plays only until 1.2 s; B's from 1.3 s of its own audio
+    // (1.8 s on the medley's clock) to its last note (2 s).
+    std::ofstream(folder / "a.osu") << withTiming(MakeOsu(0, "A"), "0,500,4,1,0,100,1,1\n1400,-100,4,1,0,100,0,0\n");
+    std::ofstream(folder / "b.osu") << withTiming(MakeOsu(0, "B"), "0,500,4,1,0,100,1,0\n1300,-100,4,1,0,100,0,1\n");
+    std::ofstream(folder / "song.medley.json") << R"({"medley": 1, "title": "Song", "audio": "audio.mp3",
+        "sources": [{"name": "a", "chart": "a.osu"}, {"name": "b", "chart": "b.osu", "audioLagMs": 500}],
+        "parts": [{"source": "a", "untilMs": 1200}, {"source": "b"}]})";
+    hyoshi::Result<hyoshi::songs::LoadedMixedChart> medley =
+        hyoshi::songs::LoadMedleyFile((folder / "song.medley.json").string());
+    std::error_code error;
+    fs::remove_all(folder, error);
+    REQUIRE(medley);
+    const std::vector<hyoshi::rhythm::KiaiSection>& kiai = medley.Value().Info.Kiai;
+    REQUIRE(kiai.size() == 2);
+    CHECK(kiai[0].Start == 0);
+    CHECK(kiai[0].End == 1'200'000);
+    CHECK(kiai[1].Start == 1'800'000);
+    CHECK(kiai[1].End == 2'000'000);
+}

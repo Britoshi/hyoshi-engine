@@ -54,6 +54,7 @@ struct OsuTimingPoint
     int SampleSet = 0;
     int SampleIndex = 0;
     int Volume = 100;
+    bool IsKiai = false;
 };
 
 struct OsuHitObject
@@ -376,6 +377,7 @@ Result<OsuStandardImportResult> ImportOsuStandard(std::string_view osuText)
             point.SampleSet = fields.size() > 3 ? ParseInt(fields[3], 0) : 0;
             point.SampleIndex = fields.size() > 4 ? std::max(0, ParseInt(fields[4], 0)) : 0;
             point.Volume = fields.size() > 5 ? std::clamp(ParseInt(fields[5], 100), 0, 100) : 100;
+            point.IsKiai = detail::IsKiaiOn(fields);
             if (point.IsUninherited && point.BeatLength <= 0.0)
             {
                 result.Warnings.push_back(where + ": timing point with no tempo, skipped");
@@ -636,6 +638,14 @@ Result<OsuStandardImportResult> ImportOsuStandard(std::string_view osuText)
     }
 
     circle::FinishCircleChart(chart);
+
+    std::vector<std::pair<SongTimeUs, bool>> kiai;
+    kiai.reserve(timingPoints.size());
+    for (const OsuTimingPoint& point : timingPoints)
+    {
+        kiai.emplace_back(MsToUs(point.TimeMs, offsetUs), point.IsKiai);
+    }
+    chart.Info.Kiai = detail::MakeKiaiSections(kiai, chart.GetEndTime());
     return result;
 }
 

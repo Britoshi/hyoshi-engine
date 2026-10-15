@@ -18,6 +18,8 @@ namespace hyoshi::osu
 // - OverallDifficulty: kept in the metadata, for a game that judges by it.
 // - Holds: type bit 128, end time in the extras.
 // - Timing: every uninherited point becomes a timing point.
+// - Kiai time: from every point's effects (bit 0), inherited or not, to Info.Kiai; one on at the
+//   end runs to the last note's end.
 // - Scroll velocity: inherited points set it (-100 / beatLength, clamped to 0.1..10, as osu!
 //   does), uninherited points reset it to 1, and BPM changes scale it relative to the most
 //   common BPM, the way osu!mania scrolls.

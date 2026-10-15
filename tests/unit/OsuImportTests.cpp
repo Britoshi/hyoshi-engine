@@ -95,6 +95,28 @@ TEST_CASE("osu!mania import: lanes, holds, metadata, timing, and scroll velocity
     CHECK(chart.Info.ScrollVelocity[2].Multiplier == doctest::Approx(2.0));
 }
 
+TEST_CASE("osu!mania import: kiai time from every timing point")
+{
+    hyoshi::Result<hyoshi::osu::OsuImportResult> plain = hyoshi::osu::ImportOsuMania(OSU_4K);
+    REQUIRE(plain);
+    CHECK(plain.Value().Chart.Info.Kiai.empty());
+    // On at 1 s (uninherited), off at 3 s (inherited).
+    hyoshi::Result<hyoshi::osu::OsuImportResult> kiai =
+        hyoshi::osu::ImportOsuMania(WithLine(OSU_4K, "1000,500,4,1,0,100,1,0", "1000,500,4,1,0,100,1,1"));
+    REQUIRE(kiai);
+    REQUIRE(kiai.Value().Chart.Info.Kiai.size() == 1);
+    CHECK(kiai.Value().Chart.Info.Kiai[0].Start == 1'000'000);
+    CHECK(kiai.Value().Chart.Info.Kiai[0].End == 3'000'000);
+    // On from 3 s and still on after the last point: to the last note's end (3000.4 ms).
+    hyoshi::Result<hyoshi::osu::OsuImportResult> toEnd =
+        hyoshi::osu::ImportOsuMania(WithLine(WithLine(OSU_4K, "3000,-200,4,1,0,100,0,0", "3000,-200,4,1,0,100,0,1"),
+                                             "20000,250,3,1,0,100,1,0", "20000,250,3,1,0,100,1,1"));
+    REQUIRE(toEnd);
+    REQUIRE(toEnd.Value().Chart.Info.Kiai.size() == 1);
+    CHECK(toEnd.Value().Chart.Info.Kiai[0].Start == 3'000'000);
+    CHECK(toEnd.Value().Chart.Info.Kiai[0].End == 3'000'400);
+}
+
 TEST_CASE("osu! info: a song list's details without the notes, as the importer reads them")
 {
     const std::string text =

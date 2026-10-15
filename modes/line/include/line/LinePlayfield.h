@@ -77,9 +77,10 @@ public:
     // something else while hiding the notes.
     void DrawLines(renderer::SpriteBatch& sprites, const LineChart& chart, SongTimeUs time, const LineLayout& layout,
                    int32_t layer) const;
-    // Just the notes and the bursts, in layers firstLayer and firstLayer + 1.
+    // Just the notes and the bursts, in layers firstLayer and firstLayer + 1. `flash` is how much
+    // the notes flash, 0 to 1 (renderer::FLASH_WHITENING).
     void DrawNotes(renderer::SpriteBatch& sprites, const LineChart& chart, const LineJudge& judge, SongTimeUs time,
-                   const LineLayout& layout, int32_t firstLayer, float noteSpeed = 1.0f) const;
+                   const LineLayout& layout, int32_t firstLayer, float noteSpeed = 1.0f, float flash = 0.0f) const;
 
 private:
     struct Burst

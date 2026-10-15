@@ -88,6 +88,48 @@ void ShiftTiming(hyoshi::rhythm::Chart& info, SongTimeUs delta)
     {
         point.Time += delta;
     }
+    for (hyoshi::rhythm::KiaiSection& section : info.Kiai)
+    {
+        section.Start += delta;
+        section.End += delta;
+    }
+}
+
+// The source's kiai time (its chart's own, before any shift) on the medley's clock, kept to its
+// parts.
+void AddKiai(const hyoshi::rhythm::Chart& info, const Source& source, std::vector<hyoshi::rhythm::KiaiSection>& into)
+{
+    for (const hyoshi::rhythm::KiaiSection& section : info.Kiai)
+    {
+        for (const auto& [start, end] : source.Spans)
+        {
+            const SongTimeUs from = std::max(section.Start + source.Delta, start);
+            const SongTimeUs to = std::min(section.End + source.Delta, end);
+            if (from < to)
+            {
+                into.push_back({from, to});
+            }
+        }
+    }
+}
+
+// Sorted, with sections that overlap or touch joined.
+std::vector<hyoshi::rhythm::KiaiSection> JoinKiai(std::vector<hyoshi::rhythm::KiaiSection> sections)
+{
+    std::sort(sections.begin(), sections.end(), [](const auto& a, const auto& b) { return a.Start < b.Start; });
+    std::vector<hyoshi::rhythm::KiaiSection> joined;
+    for (const hyoshi::rhythm::KiaiSection& section : sections)
+    {
+        if (!joined.empty() && section.Start <= joined.back().End)
+        {
+            joined.back().End = std::max(joined.back().End, section.End);
+        }
+        else
+        {
+            joined.push_back(section);
+        }
+    }
+    return joined;
 }
 
 // The lanes' notes the source keeps, moved by its delta.
@@ -478,7 +520,9 @@ hyoshi::Result<LoadedMixedChart> LoadMedleyFile(const std::string& path)
         start = until;
     }
 
-    // Each kind of note from one source: its kept notes, on the medley's clock.
+    // Each kind of note from one source: its kept notes, on the medley's clock. The kiai time is
+    // every source's, in the parts it plays.
+    std::vector<hyoshi::rhythm::KiaiSection> kiai;
     for (Source& source : sources)
     {
         HYOSHI_LOG_DEBUG("Medley: source '{}', {}, in {} parts", source.Name,
@@ -486,6 +530,10 @@ hyoshi::Result<LoadedMixedChart> LoadMedleyFile(const std::string& path)
         if (source.Spans.empty())
         {
             continue;
+        }
+        if (source.Circles || source.Mixed)
+        {
+            AddKiai(source.Circles ? source.Circles->Info : source.Mixed->Info, source, kiai);
         }
         if (source.Circles)
         {
@@ -555,6 +603,7 @@ hyoshi::Result<LoadedMixedChart> LoadMedleyFile(const std::string& path)
     {
         loaded.Info.Timing = loaded.Circles->Info.Timing;
     }
+    loaded.Info.Kiai = JoinKiai(std::move(kiai));
     MarkSimultaneousAcrossModes(loaded);
 
     // The modes, in the order the parts first play them.

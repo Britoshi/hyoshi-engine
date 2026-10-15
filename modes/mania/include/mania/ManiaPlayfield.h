@@ -45,6 +45,8 @@ struct PlayfieldStyle
     // track's edges in the first: a map's own colors. Empty for the usual white and blue, with a
     // gold middle lane.
     std::vector<renderer::Color> LaneColors;
+    // How much the notes flash, 0 to 1 (renderer::FLASH_WHITENING).
+    float NoteFlash = 0.0f;
 };
 
 // Draws a Mania playfield with SpriteBatch, flat or as a track in perspective (PlayfieldView): lanes,

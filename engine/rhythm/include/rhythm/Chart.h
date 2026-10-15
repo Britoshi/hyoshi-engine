@@ -54,6 +54,13 @@ struct TimingPoint
     uint32_t BeatUnit = 4;
 };
 
+// A stretch of a chart's highlight (osu!'s kiai time), for a game's effects.
+struct KiaiSection
+{
+    SongTimeUs Start = 0;
+    SongTimeUs End = 0;
+};
+
 struct ScrollVelocityPoint
 {
     SongTimeUs Time = 0;
@@ -101,6 +108,8 @@ struct Chart
     std::vector<std::string> Samples;
     std::vector<TimingPoint> Timing;
     std::vector<ScrollVelocityPoint> ScrollVelocity;
+    // The highlights (osu!'s kiai time), sorted and apart; none for most formats.
+    std::vector<KiaiSection> Kiai;
     // Sorted by Time.
     std::vector<ChartNote> Notes;
 };

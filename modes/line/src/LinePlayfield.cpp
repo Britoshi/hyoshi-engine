@@ -192,7 +192,8 @@ void LinePlayfield::DrawLines(renderer::SpriteBatch& sprites, const LineChart& c
 }
 
 void LinePlayfield::DrawNotes(renderer::SpriteBatch& sprites, const LineChart& chart, const LineJudge& judge,
-                              SongTimeUs time, const LineLayout& layout, int32_t firstLayer, float noteSpeed) const
+                              SongTimeUs time, const LineLayout& layout, int32_t firstLayer, float noteSpeed,
+                              float flash) const
 {
     const auto draw = [&](glm::vec2 center, glm::vec2 size, float angle, Color tint, int32_t layer)
     { DrawOnField(sprites, layout, center, size, angle, tint, firstLayer + layer); };
@@ -213,7 +214,7 @@ void LinePlayfield::DrawNotes(renderer::SpriteBatch& sprites, const LineChart& c
         const glm::vec2 onLine = line.Position + (line.Along * (note.X * X_UNIT));
         // A held note's head stays on the line while its body drains into it.
         const float head = state == NoteState::Held ? 0.0f : GetNoteDistance(chart, note, time) * noteSpeed;
-        const Color tint = GetNoteTint(note.Kind);
+        const Color tint = renderer::TowardWhite(GetNoteTint(note.Kind), flash * renderer::FLASH_WHITENING);
         if (note.IsHold())
         {
             const float end =
@@ -241,6 +242,12 @@ void LinePlayfield::DrawNotes(renderer::SpriteBatch& sprites, const LineChart& c
         {
             draw(center, {noteWidth + (SHINE_MARGIN * 2.0f), height + (SHINE_MARGIN * 2.0f)}, line.Angle,
                  WithAlpha(renderer::SHINE, SHINE_ALPHA), NOTE_LAYER);
+        }
+        // Flashing: a white glow around it.
+        if (flash > 0.0f)
+        {
+            draw(center, {noteWidth + (SHINE_MARGIN * 2.0f), height + (SHINE_MARGIN * 2.0f)}, line.Angle,
+                 WithAlpha(renderer::WHITE, flash * renderer::FLASH_GLOW_ALPHA), NOTE_LAYER);
         }
         draw(center, {noteWidth, height}, line.Angle, tint, NOTE_LAYER);
         if (note.Kind == NoteKind::Flick)

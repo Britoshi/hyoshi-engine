@@ -704,22 +704,30 @@ void CirclePlayfield::DrawHead(const Frame& frame, uint32_t index) const
         frame.DrawShape(Shape::Disc, head, frame.Diameter * SHINE_SCALE,
                         WithAlpha(renderer::SHINE, alpha * SHINE_ALPHA), NOTE_LAYER);
     }
+    // Flashing: a white glow around it, and its color lighter.
+    const float flash = frame.Style.Flash;
+    if (flash > 0.0f)
+    {
+        frame.DrawShape(Shape::Disc, head, frame.Diameter * SHINE_SCALE,
+                        WithAlpha(renderer::WHITE, alpha * flash * renderer::FLASH_GLOW_ALPHA), NOTE_LAYER);
+    }
+    const auto lit = [flash](Color color) { return renderer::TowardWhite(color, flash * renderer::FLASH_WHITENING); };
     if (IsDiamond(note))
     {
         const float size = frame.Diameter * GetHeadScale(note);
-        frame.DrawShape(Shape::DiamondFill, head, size, WithAlpha(DIAMOND_FILL_TINT, alpha), NOTE_LAYER);
-        frame.DrawShape(Shape::Diamond, head, size, WithAlpha(GetDiamondTint(note), alpha), NOTE_LAYER);
+        frame.DrawShape(Shape::DiamondFill, head, size, WithAlpha(lit(DIAMOND_FILL_TINT), alpha), NOTE_LAYER);
+        frame.DrawShape(Shape::Diamond, head, size, WithAlpha(lit(GetDiamondTint(note)), alpha), NOTE_LAYER);
     }
     else if (const std::optional<Color> combo = GetComboColor(frame, note))
     {
         // A dark halo, the circle in its color, and a light rim: readable on any background.
         frame.DrawShape(Shape::Disc, head, frame.Diameter * HALO_SCALE, WithAlpha(HALO_TINT, alpha), NOTE_LAYER);
-        frame.DrawShape(Shape::HitCircle, head, frame.Diameter, WithAlpha(*combo, alpha), NOTE_LAYER);
+        frame.DrawShape(Shape::HitCircle, head, frame.Diameter, WithAlpha(lit(*combo), alpha), NOTE_LAYER);
         frame.DrawShape(Shape::Ring, head, frame.Diameter, WithAlpha(RIM_TINT, alpha), NOTE_LAYER);
     }
     else
     {
-        frame.DrawShape(Shape::HitCircle, head, frame.Diameter, WithAlpha(NOTE_TINT, alpha), NOTE_LAYER);
+        frame.DrawShape(Shape::HitCircle, head, frame.Diameter, WithAlpha(lit(NOTE_TINT), alpha), NOTE_LAYER);
     }
     if (frame.Style.AreComboNumbersShown)
     {
