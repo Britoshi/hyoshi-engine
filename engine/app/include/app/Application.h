@@ -194,9 +194,8 @@ private:
     std::unique_ptr<audio::IAudioBackend> audio;
     std::unique_ptr<ui::Ui> ui;
     std::unique_ptr<AppServices> services;
-    // The engine's logos, for the splash.
-    ui::Logo stackedLogo;
-    ui::Logo horizontalLogo;
+    // The engine's wordmark, for the splash (which draws the mark itself).
+    ui::Logo wordmarkLogo;
     std::unique_ptr<Scene> scene;
     // The scene switched away from this frame. Its sprites are still in the frame's batch and may
     // use its textures, so it lives until the frame is recorded.

@@ -123,7 +123,7 @@ Environment variables don't reach Android apps, so there are no scripted runs on
 - **The clock starts up to 35 ms late after an audio device restart.** When WASAPI restarts, miniaudio fills the whole device buffer at once (3 or 4 callbacks within about 6 ms), moving the music position forward 30 to 40 ms. `SongClock` re-anchors on the first callback and then sees an error of +29 to +35 ms. Above 30 ms it snaps and counts a resync; below, it corrects by 1 ms per frame, so song time is late for about 30 frames. CoreAudio doesn't do this; AAudio might. A possible fix: after a stall, re-anchor on each new snapshot, without counting resyncs, until one arrives in real time.
 - **Offset changes ease in over about 0.2 seconds,** because the clock's filter corrects 10% per frame. Jumps of 30 ms or more re-anchor immediately.
 - **Android: silent if AAudio refuses the stream.** Right after an emulator boot, AAudio once returned `AAUDIO_ERROR_ILLEGAL_ARGUMENT`, and miniaudio fell back to its null backend for the whole session. Restarting the app fixed it. Retrying, or falling back to OpenSL ES, would be more reliable.
-- **Logos are processed at startup.** The splash's distance fields are computed when the app starts, so unoptimized Android builds show the system splash for about a second first. Processing them at build time would fix this.
+- **Logos are processed at startup.** The splash's wordmark is made a distance field when the app starts, so unoptimized Android builds show the system splash for about a second first. Processing them at build time would fix this.
 
 ## Not yet tested
 

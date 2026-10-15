@@ -486,8 +486,7 @@ hyoshi::Result<void> Application::Initialize()
         return result;
     }
     const std::string engineTextures = platform.GetAssetPath(std::string(ENGINE_ASSETS) + "textures/");
-    stackedLogo = ui::LoadLogo(*device, engineTextures + "logo-stacked.png", 768);
-    horizontalLogo = ui::LoadLogo(*device, engineTextures + "logo-horizontal.png", 1024);
+    wordmarkLogo = ui::LoadLogo(*device, engineTextures + "logo-wordmark.png", 1024);
     SetWindowIcon();
     isDebugVisible = IsEnvSet("HYOSHI_DEBUG_UI");
 
@@ -619,7 +618,8 @@ void Application::StartFirstScene()
     }
     else if (config.ShowSplash)
     {
-        scene = std::make_unique<SplashScene>(stackedLogo, horizontalLogo, [this] { return game.CreateFirstScene(); });
+        scene =
+            std::make_unique<SplashScene>(wordmarkLogo, *device, *audio, [this] { return game.CreateFirstScene(); });
     }
     else
     {
@@ -756,8 +756,7 @@ void Application::Shutdown()
     }
     if (device)
     {
-        ui::DestroyLogo(*device, stackedLogo);
-        ui::DestroyLogo(*device, horizontalLogo);
+        ui::DestroyLogo(*device, wordmarkLogo);
     }
     text.Shutdown();
     debugUi.Shutdown();
