@@ -14,8 +14,8 @@ namespace hyoshi::app
 
 // "Made with Hyoshi Engine", on a beat: the mark's four tiles land one a beat, each lighting a
 // dash of a line under it with a knock; on the fifth beat the dashes join with a flash and
-// sparks, and the wordmark slides out from behind the mark. Then the game's first scene. Any key
-// or tap skips it. Its sounds play on the UI bus, so a game sets that bus's volume.
+// sparks, and the wordmark slides out from behind the mark. Then the game's first scene. It can't
+// be skipped. Its sounds play on the UI bus, so a game sets that bus's volume.
 class SplashScene : public Scene
 {
 public:

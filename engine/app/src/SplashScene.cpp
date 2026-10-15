@@ -31,8 +31,6 @@ constexpr float FIRST_BEAT_SECONDS = 0.3f;
 constexpr float BEAT_SECONDS = 0.25f;
 constexpr float LEAVE_AT_SECONDS = 2.45f;
 constexpr float FADE_OUT_SECONDS = 0.4f;
-// Input this early is probably still the click that launched the game.
-constexpr float SKIP_AFTER_SECONDS = 0.2f;
 // A slow frame (the first few, while the GPU warms up) moves the splash on by at most this much,
 // so no beat is skipped.
 constexpr float MAX_STEP_SECONDS = 1.0f / 30.0f;
@@ -384,8 +382,7 @@ void SplashScene::PlayBeats()
 void SplashScene::RunFrame(const FrameContext& frame, ui::Ui& ui)
 {
     age += std::min(frame.DeltaSeconds, MAX_STEP_SECONDS);
-    const bool isSkipped = age >= SKIP_AFTER_SECONDS && (ui.WasPointerPressed() || ui.WasAnyKeyPressed());
-    if (leaveAge < 0.0f && (age >= LEAVE_AT_SECONDS || isSkipped))
+    if (leaveAge < 0.0f && age >= LEAVE_AT_SECONDS)
     {
         leaveAge = age;
     }
