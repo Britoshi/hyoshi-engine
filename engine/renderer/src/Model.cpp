@@ -18,6 +18,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -107,6 +108,7 @@ ModelPart MakePart(const cgltf_material* material, const std::string& modelPath)
         return part;
     }
     part.Name = material->name != nullptr ? material->name : "material";
+    part.Extras = material->extras.data != nullptr ? material->extras.data : "";
     part.IsTwoSided = material->double_sided != 0;
     part.IsSeeThrough = material->alpha_mode != cgltf_alpha_mode_opaque;
     if (material->has_pbr_metallic_roughness != 0)
@@ -156,7 +158,7 @@ public:
             }
             for (size_t i = 0; i < node.mesh->primitives_count; ++i)
             {
-                AddPrimitive(node.mesh->primitives[i], glm::make_mat4(world.data()));
+                AddPrimitive(*node.mesh, node.mesh->primitives[i], glm::make_mat4(world.data()));
             }
         }
         for (size_t i = 0; i < node.children_count; ++i)
@@ -175,7 +177,52 @@ public:
     }
 
 private:
-    void AddPrimitive(const cgltf_primitive& primitive, const glm::mat4& transform)
+    // The primitive's blend shapes, into its part's by name (a part gathers a material's primitives,
+    // so a vertex's index is where the primitive's first landed, plus its own).
+    static void AddMorphs(const cgltf_mesh& gltfMesh, const cgltf_primitive& primitive, const glm::mat4& transform,
+                          ModelPart& part, uint32_t first)
+    {
+        const glm::mat3 turn(transform);
+        for (size_t target = 0; target < primitive.targets_count; ++target)
+        {
+            const cgltf_morph_target& morph = primitive.targets[target];
+            const cgltf_accessor* moves = nullptr;
+            for (size_t i = 0; i < morph.attributes_count; ++i)
+            {
+                if (morph.attributes[i].type == cgltf_attribute_type_position)
+                {
+                    moves = morph.attributes[i].data;
+                }
+            }
+            if (moves == nullptr)
+            {
+                continue;
+            }
+            const std::string name = target < gltfMesh.target_names_count && gltfMesh.target_names[target] != nullptr
+                                         ? std::string(gltfMesh.target_names[target])
+                                         : "target " + std::to_string(target);
+            auto found = std::find_if(part.Morphs.begin(), part.Morphs.end(),
+                                      [&name](const MorphTarget& known) { return known.Name == name; });
+            if (found == part.Morphs.end())
+            {
+                part.Morphs.push_back({name, {}});
+                found = std::prev(part.Morphs.end());
+            }
+            // Unpacked, as exporters often write a blend shape sparse (only the vertices it moves).
+            std::vector<float> floats(moves->count * 3);
+            cgltf_accessor_unpack_floats(moves, floats.data(), floats.size());
+            for (size_t i = 0; i < moves->count; ++i)
+            {
+                const glm::vec3 move{floats[i * 3], floats[(i * 3) + 1], floats[(i * 3) + 2]};
+                if (glm::dot(move, move) > 1.0e-14f)
+                {
+                    found->Moves.emplace_back(first + static_cast<uint32_t>(i), turn * move);
+                }
+            }
+        }
+    }
+
+    void AddPrimitive(const cgltf_mesh& gltfMesh, const cgltf_primitive& primitive, const glm::mat4& transform)
     {
         const cgltf_accessor* positions = nullptr;
         const cgltf_accessor* normals = nullptr;
@@ -246,6 +293,8 @@ private:
             }
             mesh.Vertices.push_back(vertex);
         }
+
+        AddMorphs(gltfMesh, primitive, transform, model.Parts[partIndex], first);
 
         // A mirroring transform turns triangles inside out: wind them back.
         const bool isMirrored = glm::determinant(glm::mat3(transform)) < 0.0f;

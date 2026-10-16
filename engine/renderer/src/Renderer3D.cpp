@@ -239,6 +239,55 @@ Result<MeshHandle> Renderer3D::CreateMesh(const MeshData& data, const char* debu
     return meshes.Create(mesh);
 }
 
+Result<MeshHandle> Renderer3D::CreateDynamicMesh(const MeshData& data, const char* debugName)
+{
+    Result<MeshHandle> made = CreateMesh(data, debugName);
+    if (!made)
+    {
+        return made;
+    }
+    GpuMesh* mesh = meshes.Get(made.Value());
+    const size_t vertexBytes = data.Vertices.size() * sizeof(MeshVertex);
+    for (rhi::BufferHandle& copy : mesh->FrameVertices)
+    {
+        rhi::BufferDesc desc;
+        desc.Size = vertexBytes;
+        desc.Usage = rhi::BufferUsage::Vertex;
+        desc.Memory = rhi::MemoryUsage::CpuToGpu;
+        desc.DebugName = debugName;
+        Result<rhi::BufferHandle> buffer = device->CreateBuffer(desc);
+        Result<void> uploaded = buffer ? device->UploadBuffer(buffer.Value(), data.Vertices.data(), vertexBytes, 0)
+                                       : Result<void>(buffer.GetError());
+        if (buffer)
+        {
+            copy = buffer.Value();
+        }
+        if (!uploaded)
+        {
+            Destroy(made.Value());
+            return uploaded.GetError();
+        }
+    }
+    mesh->Latest = data.Vertices;
+    return made;
+}
+
+Result<void> Renderer3D::UpdateMesh(MeshHandle mesh, std::span<const MeshVertex> vertices)
+{
+    GpuMesh* found = meshes.Get(mesh);
+    if (found == nullptr || !found->FrameVertices[0].IsValid())
+    {
+        return Error{"Not a dynamic mesh"};
+    }
+    if (vertices.size() != found->Latest.size())
+    {
+        return Error{"A dynamic mesh keeps its number of vertices"};
+    }
+    std::copy(vertices.begin(), vertices.end(), found->Latest.begin());
+    found->StaleFrames = (1U << rhi::MAX_FRAMES_IN_FLIGHT) - 1U;
+    return {};
+}
+
 void Renderer3D::Destroy(MeshHandle mesh)
 {
     if (const GpuMesh* found = meshes.Get(mesh); found != nullptr)
@@ -246,6 +295,13 @@ void Renderer3D::Destroy(MeshHandle mesh)
         // The device holds deletions until the frames using them are done.
         device->Destroy(found->Vertices);
         device->Destroy(found->Indices);
+        for (const rhi::BufferHandle copy : found->FrameVertices)
+        {
+            if (copy.IsValid())
+            {
+                device->Destroy(copy);
+            }
+        }
         meshes.Destroy(mesh);
     }
 }
@@ -309,12 +365,28 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
                         PackFog(lighting.Fog, lighting.FogDensity)};
     }
     size_t boundPipeline = PIPELINE_COUNT;
+    const uint32_t frame = device->GetFrameIndex();
     for (const DrawItem& item : draws)
     {
-        const GpuMesh* mesh = meshes.Get(item.Mesh);
+        GpuMesh* mesh = meshes.Get(item.Mesh);
         if (mesh == nullptr)
         {
             continue;
+        }
+        // A dynamic mesh draws this frame's copy, brought up to its latest vertices first.
+        rhi::BufferHandle vertices = mesh->Vertices;
+        if (mesh->FrameVertices[frame].IsValid())
+        {
+            vertices = mesh->FrameVertices[frame];
+            if ((mesh->StaleFrames & (1U << frame)) != 0)
+            {
+                if (Result<void> uploaded = device->UploadBuffer(vertices, mesh->Latest.data(),
+                                                                 mesh->Latest.size() * sizeof(MeshVertex), 0);
+                    uploaded)
+                {
+                    mesh->StaleFrames &= ~(1U << frame);
+                }
+            }
         }
         if (const size_t pipeline = GetPipelineIndex(item.Surface); pipeline != boundPipeline)
         {
@@ -322,7 +394,7 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
             boundPipeline = pipeline;
         }
         commands.BindTexture(0, item.Surface.Texture.IsValid() ? item.Surface.Texture : whiteTexture, sampler);
-        commands.BindVertexBuffer(0, mesh->Vertices, 0);
+        commands.BindVertexBuffer(0, vertices, 0);
         commands.BindIndexBuffer(mesh->Indices, 0, rhi::IndexType::UInt32);
 
         // The light and the camera moved into the object's space, where its normals are.

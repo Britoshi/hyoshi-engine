@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace hyoshi::renderer
@@ -83,6 +84,11 @@ public:
     }
 
     Result<MeshHandle> CreateMesh(const MeshData& data, const char* debugName = "mesh");
+    // A mesh whose vertices change while it's drawn (a face's blend shapes, worked out on the CPU):
+    // UpdateMesh gives it new vertices, as many and in the same order as it was made with (its
+    // triangles stay), seen from the next frame drawn. Each frame in flight has its own copy.
+    Result<MeshHandle> CreateDynamicMesh(const MeshData& data, const char* debugName = "mesh");
+    Result<void> UpdateMesh(MeshHandle mesh, std::span<const MeshVertex> vertices);
     void Destroy(MeshHandle mesh);
 
     void SetCamera(const Camera3D& newCamera)
@@ -116,6 +122,11 @@ private:
         rhi::BufferHandle Vertices;
         rhi::BufferHandle Indices;
         uint32_t IndexCount = 0;
+        // A dynamic mesh's: a copy of its vertices for each frame in flight, its latest vertices,
+        // and which frames' copies are behind them (a bit each).
+        std::array<rhi::BufferHandle, rhi::MAX_FRAMES_IN_FLIGHT> FrameVertices{};
+        std::vector<MeshVertex> Latest;
+        uint32_t StaleFrames = 0;
     };
 
     struct DrawItem

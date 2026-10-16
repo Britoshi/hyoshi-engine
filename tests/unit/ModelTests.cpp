@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -16,12 +17,30 @@ namespace
 constexpr std::string_view TRIANGLES =
     R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,1]}],"nodes":[{"mesh":0,"translation":[1,2,3]},)"
     R"({"mesh":0,"scale":[-1,1,1]}],"meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1,"material":0}]}],)"
-    R"("materials":[{"name":"Robe","pbrMetallicRoughness":{"baseColorFactor":[1,0.5,0,1]},"doubleSided":true}],)"
+    R"("materials":[{"name":"Robe","pbrMetallicRoughness":{"baseColorFactor":[1,0.5,0,1]},"doubleSided":true,)"
+    R"("extras":{"toon":1}}],)"
     R"("buffers":[{"byteLength":44,"uri":"data:application/octet-stream;base64,)"
     R"(AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAABAAIAAAA="}],)"
     R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":6}],)"
     R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},)"
     R"({"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}]})";
+
+// The triangle (unplaced) with two blend shapes: "smile" lifts its second corner by half, and "wink",
+// sparse (as Blender writes them), moves its third a quarter across.
+constexpr std::string_view SMILING =
+    R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)"
+    R"("meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1,"targets":[{"POSITION":2},{"POSITION":3}]}],)"
+    R"("extras":{"targetNames":["smile","wink"]}}],)"
+    R"("buffers":[{"byteLength":96,"uri":"data:application/octet-stream;base64,)"
+    R"(AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAABAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPwAAAAAAAAAAAAAAAAAAAAACAAAAAACAPgAAAAAAAAAA"}],)"
+    R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":6},)"
+    R"({"buffer":0,"byteOffset":44,"byteLength":36},{"buffer":0,"byteOffset":80,"byteLength":2},)"
+    R"({"buffer":0,"byteOffset":84,"byteLength":12}],)"
+    R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},)"
+    R"({"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"},)"
+    R"({"bufferView":2,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0,0.5,0]},)"
+    R"({"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0.25,0,0],)"
+    R"("sparse":{"count":1,"indices":{"bufferView":3,"componentType":5123},"values":{"bufferView":4}}}]})";
 
 // A .glb (as Blender exports): one triangle with normals and texture coordinates, its material a
 // 2x2 PNG inside the file (red, green, blue, and half-transparent white), blended.
@@ -96,6 +115,7 @@ TEST_CASE("ReadModel places a glTF's meshes by their nodes, with its materials")
     REQUIRE(model.Value().Parts.size() == 1);
     const hyoshi::renderer::ModelPart& part = model.Value().Parts[0];
     CHECK(part.Name == "Robe");
+    CHECK(part.Extras == R"({"toon":1})");
     CHECK(part.IsTwoSided);
     CHECK_FALSE(part.IsSeeThrough);
     // Linear 0.5 is sRGB 186.
@@ -145,4 +165,21 @@ TEST_CASE("ReadModel reads a .glb's texture")
     REQUIRE(part.Mesh.Vertices.size() == 3);
     CHECK(part.Mesh.Vertices[0].Uv.y == doctest::Approx(1.0f));
     CHECK(part.Mesh.Vertices[1].Normal.z == doctest::Approx(1.0f));
+}
+
+TEST_CASE("ReadModel reads blend shapes by name, dense or sparse, only the vertices they move")
+{
+    const hyoshi::Result<hyoshi::renderer::ModelData> model = hyoshi::renderer::ReadModel(AsBytes(SMILING));
+    REQUIRE(model);
+    REQUIRE(model.Value().Parts.size() == 1);
+    const std::vector<hyoshi::renderer::MorphTarget>& morphs = model.Value().Parts[0].Morphs;
+    REQUIRE(morphs.size() == 2);
+    CHECK(morphs[0].Name == "smile");
+    REQUIRE(morphs[0].Moves.size() == 1);
+    CHECK(morphs[0].Moves[0].first == 1);
+    CHECK(morphs[0].Moves[0].second.y == doctest::Approx(0.5f));
+    CHECK(morphs[1].Name == "wink");
+    REQUIRE(morphs[1].Moves.size() == 1);
+    CHECK(morphs[1].Moves[0].first == 2);
+    CHECK(morphs[1].Moves[0].second.x == doctest::Approx(0.25f));
 }
