@@ -5,6 +5,7 @@ add_library(hyoshi_renderer STATIC
     src/Mesh.cpp
     src/Model.cpp
     src/Renderer3D.cpp
+    src/Skinning.cpp
     src/SpriteBatch.cpp
     src/TextRenderer.cpp
     src/ThirdPartyImplementations.cpp
@@ -20,9 +21,11 @@ hyoshi_add_shaders(hyoshi_renderer
 )
 
 # stb's decoding and resizing are optimized in debug builds too (see ThirdPartyImplementations.cpp,
-# which does it for MSVC): unoptimized, a song's picture takes up to half a second to resize.
+# which does it for MSVC): unoptimized, a song's picture takes up to half a second to resize. So is
+# skinning, which moves tens of thousands of vertices every frame.
 if(NOT MSVC)
-    set_source_files_properties(src/ThirdPartyImplementations.cpp PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O2>")
+    set_source_files_properties(src/ThirdPartyImplementations.cpp src/Skinning.cpp
+        PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O2>")
 endif()
 
 hyoshi_set_warnings(hyoshi_renderer)

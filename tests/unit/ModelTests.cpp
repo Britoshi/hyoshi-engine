@@ -1,4 +1,5 @@
 #include "renderer/Model.h"
+#include "renderer/Skinning.h"
 
 #include <doctest/doctest.h>
 
@@ -41,6 +42,32 @@ constexpr std::string_view SMILING =
     R"({"bufferView":2,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0,0.5,0]},)"
     R"({"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0.25,0,0],)"
     R"("sparse":{"count":1,"indices":{"bufferView":3,"componentType":5123},"values":{"bufferView":4}}}]})";
+
+// The triangle skinned to one joint, "Bone", at (0, 1, 0) under "Armature" at (0, 0, 5) (its inverse
+// bind undoing both), the mesh's node moved (which glTF ignores for a skinned mesh); "Turn" turns the
+// bone a quarter about z over a second.
+constexpr std::string_view SKINNED =
+    R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,2]}],)"
+    R"("nodes":[{"name":"Armature","translation":[0,0,5],"children":[1]},{"name":"Bone","translation":[0,1,0]},)"
+    R"({"mesh":0,"skin":0,"translation":[7,7,7]}],"skins":[{"joints":[1],"inverseBindMatrices":4}],)"
+    R"("meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":2,"WEIGHTS_0":3},"indices":1}]}],)"
+    R"("animations":[{"name":"Turn","channels":[{"sampler":0,"target":{"node":1,"path":"rotation"}}],)"
+    R"("samplers":[{"input":5,"output":6,"interpolation":"LINEAR"}]}],)"
+    R"("buffers":[{"byteLength":208,"uri":"data:application/octet-stream;base64,)"
+    R"(AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAABAAIAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAA)"
+    R"(AAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAA)"
+    R"(AACAvwAAoMAAAIA/AAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAADzBDU/8wQ1Pw=="}],)"
+    R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":6},)"
+    R"({"buffer":0,"byteOffset":44,"byteLength":12},{"buffer":0,"byteOffset":56,"byteLength":48},)"
+    R"({"buffer":0,"byteOffset":104,"byteLength":64},{"buffer":0,"byteOffset":168,"byteLength":8},)"
+    R"({"buffer":0,"byteOffset":176,"byteLength":32}],)"
+    R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},)"
+    R"({"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"},)"
+    R"({"bufferView":2,"componentType":5121,"count":3,"type":"VEC4"},)"
+    R"({"bufferView":3,"componentType":5126,"count":3,"type":"VEC4"},)"
+    R"({"bufferView":4,"componentType":5126,"count":1,"type":"MAT4"},)"
+    R"({"bufferView":5,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[1]},)"
+    R"({"bufferView":6,"componentType":5126,"count":2,"type":"VEC4"}]})";
 
 // A .glb (as Blender exports): one triangle with normals and texture coordinates, its material a
 // 2x2 PNG inside the file (red, green, blue, and half-transparent white), blended.
@@ -182,4 +209,50 @@ TEST_CASE("ReadModel reads blend shapes by name, dense or sparse, only the verti
     REQUIRE(morphs[1].Moves.size() == 1);
     CHECK(morphs[1].Moves[0].first == 2);
     CHECK(morphs[1].Moves[0].second.x == doctest::Approx(0.25f));
+}
+
+TEST_CASE("ReadModel reads a skin and its animation, which PoseNodes and SkinVertices play")
+{
+    hyoshi::Result<hyoshi::renderer::ModelData> read = hyoshi::renderer::ReadModel(AsBytes(SKINNED));
+    REQUIRE(read);
+    hyoshi::renderer::ModelData& model = read.Value();
+    REQUIRE(model.Nodes.size() == 3);
+    CHECK(model.Nodes[0].Name == "Armature");
+    CHECK(model.Nodes[1].Parent == 0);
+    REQUIRE(model.Joints.size() == 1);
+    CHECK(model.Joints[0].Node == 1);
+    REQUIRE(model.Parts.size() == 1);
+    const hyoshi::renderer::ModelPart& part = model.Parts[0];
+    REQUIRE(part.Skin.size() == 3);
+    CHECK(part.Skin[1].Weights.x == doctest::Approx(1.0f));
+    // Where it was bound, not where its node is.
+    CHECK(part.Mesh.Vertices[1].Position.x == doctest::Approx(1.0f));
+    const hyoshi::renderer::ModelAnimation* turn = hyoshi::renderer::FindAnimation(model, "Turn");
+    REQUIRE(turn != nullptr);
+    CHECK(turn->Duration == doctest::Approx(1.0f));
+    CHECK(hyoshi::renderer::FindAnimation(model, "Walk") == nullptr);
+
+    std::vector<glm::mat4> nodes;
+    std::vector<glm::mat4> joints;
+    std::vector<hyoshi::renderer::MeshVertex> posed(3);
+    const auto corner = [&](float time)
+    {
+        hyoshi::renderer::PoseNodes(model, turn, time, nodes);
+        hyoshi::renderer::PoseJoints(model, nodes, joints);
+        hyoshi::renderer::SkinVertices(part.Mesh.Vertices, part.Skin, joints, posed);
+        return posed[1].Position;
+    };
+    // At rest, as bound; half way, an eighth turn about the bone; at the end a quarter; past it, round again.
+    CHECK(corner(0.0f).x == doctest::Approx(1.0f));
+    CHECK(corner(0.0f).y == doctest::Approx(0.0f));
+    CHECK(corner(0.5f).x == doctest::Approx(1.41421f));
+    CHECK(corner(0.5f).y == doctest::Approx(1.0f));
+    CHECK(corner(1.5f).x == doctest::Approx(1.41421f));
+    CHECK(corner(0.999f).x == doctest::Approx(1.0f).epsilon(0.01));
+    CHECK(corner(0.999f).y == doctest::Approx(2.0f).epsilon(0.01));
+    CHECK(posed[1].Normal.z == doctest::Approx(1.0f));
+
+    hyoshi::renderer::ApplyPose(model, turn, 0.5f);
+    CHECK(model.Parts[0].Skin.empty());
+    CHECK(model.Parts[0].Mesh.Vertices[1].Position.x == doctest::Approx(1.41421f));
 }

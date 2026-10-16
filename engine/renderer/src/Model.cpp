@@ -5,6 +5,7 @@
 #include <cgltf.h>
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/mat3x3.hpp>
 #include <glm/matrix.hpp>
@@ -136,6 +137,96 @@ ModelPart MakePart(const cgltf_material* material, const std::string& modelPath)
     return part;
 }
 
+// A node's own transform as translation, rotation, and scale (a matrix taken apart: no shear).
+void ReadRestTransform(const cgltf_node& gltfNode, ModelNode& node)
+{
+    if (gltfNode.has_matrix == 0)
+    {
+        if (gltfNode.has_translation != 0)
+        {
+            node.Translation = glm::make_vec3(gltfNode.translation);
+        }
+        if (gltfNode.has_rotation != 0)
+        {
+            node.Rotation =
+                glm::quat(gltfNode.rotation[3], gltfNode.rotation[0], gltfNode.rotation[1], gltfNode.rotation[2]);
+        }
+        if (gltfNode.has_scale != 0)
+        {
+            node.Scale = glm::make_vec3(gltfNode.scale);
+        }
+        return;
+    }
+    const glm::mat4 matrix = glm::make_mat4(gltfNode.matrix);
+    node.Translation = glm::vec3(matrix[3]);
+    node.Scale = {glm::length(glm::vec3(matrix[0])), glm::length(glm::vec3(matrix[1])),
+                  glm::length(glm::vec3(matrix[2]))};
+    const glm::mat3 turn(glm::vec3(matrix[0]) / node.Scale.x, glm::vec3(matrix[1]) / node.Scale.y,
+                         glm::vec3(matrix[2]) / node.Scale.z);
+    node.Rotation = glm::quat_cast(turn);
+}
+
+// The file's animations of nodes' translations, rotations, and scales (not blend shapes' weights).
+std::vector<ModelAnimation> ReadAnimations(const cgltf_data& data, const std::map<const cgltf_node*, uint32_t>& nodes)
+{
+    std::vector<ModelAnimation> animations;
+    for (size_t a = 0; a < data.animations_count; ++a)
+    {
+        const cgltf_animation& gltfAnimation = data.animations[a];
+        ModelAnimation animation;
+        animation.Name =
+            gltfAnimation.name != nullptr ? std::string(gltfAnimation.name) : "animation " + std::to_string(a);
+        for (size_t c = 0; c < gltfAnimation.channels_count; ++c)
+        {
+            const cgltf_animation_channel& gltfChannel = gltfAnimation.channels[c];
+            const auto node = nodes.find(gltfChannel.target_node);
+            const cgltf_animation_sampler* sampler = gltfChannel.sampler;
+            if (node == nodes.end() || sampler == nullptr || sampler->input == nullptr || sampler->output == nullptr)
+            {
+                continue;
+            }
+            AnimationChannel channel;
+            channel.Node = node->second;
+            switch (gltfChannel.target_path)
+            {
+            case cgltf_animation_path_type_translation:
+                channel.Path = AnimationPath::Translation;
+                break;
+            case cgltf_animation_path_type_rotation:
+                channel.Path = AnimationPath::Rotation;
+                break;
+            case cgltf_animation_path_type_scale:
+                channel.Path = AnimationPath::Scale;
+                break;
+            default:
+                continue;
+            }
+            channel.IsStep = sampler->interpolation == cgltf_interpolation_type_step;
+            // A cubic spline's output has each key's in-tangent, value, and out-tangent: its values
+            // are the middle ones.
+            const bool isCubic = sampler->interpolation == cgltf_interpolation_type_cubic_spline;
+            const size_t keys = sampler->input->count;
+            const size_t components = cgltf_num_components(sampler->output->type);
+            if (sampler->output->count < keys * (isCubic ? 3 : 1) || components > 4)
+            {
+                continue;
+            }
+            channel.Times.resize(keys);
+            channel.Values.resize(keys, glm::vec4(0.0f));
+            for (size_t k = 0; k < keys; ++k)
+            {
+                cgltf_accessor_read_float(sampler->input, k, &channel.Times[k], 1);
+                cgltf_accessor_read_float(sampler->output, isCubic ? (k * 3) + 1 : k, glm::value_ptr(channel.Values[k]),
+                                          components);
+            }
+            animation.Duration = std::max(animation.Duration, channel.Times.empty() ? 0.0f : channel.Times.back());
+            animation.Channels.push_back(std::move(channel));
+        }
+        animations.push_back(std::move(animation));
+    }
+    return animations;
+}
+
 class ModelReader
 {
 public:
@@ -143,22 +234,46 @@ public:
     {
     }
 
+    // The file's nodes, parents first (from the roots down), and its skins' joints.
+    void AddSkeleton(const cgltf_data& data)
+    {
+        for (size_t i = 0; i < data.nodes_count; ++i)
+        {
+            if (data.nodes[i].parent == nullptr)
+            {
+                AddNodeTree(data.nodes[i], -1);
+            }
+        }
+        for (size_t s = 0; s < data.skins_count; ++s)
+        {
+            const cgltf_skin& skin = data.skins[s];
+            firstJoints.emplace(&skin, static_cast<uint32_t>(model.Joints.size()));
+            for (size_t j = 0; j < skin.joints_count; ++j)
+            {
+                ModelJoint joint;
+                joint.Node = nodes.at(skin.joints[j]);
+                if (skin.inverse_bind_matrices != nullptr && j < skin.inverse_bind_matrices->count)
+                {
+                    cgltf_accessor_read_float(skin.inverse_bind_matrices, j, glm::value_ptr(joint.InverseBind), 16);
+                }
+                model.Joints.push_back(joint);
+            }
+        }
+        model.Animations = ReadAnimations(data, nodes);
+    }
+
     void AddNode(const cgltf_node& node)
     {
         if (node.mesh != nullptr)
         {
+            // A skinned mesh is where it was bound to its joints, which place it (glTF ignores its
+            // node's transform).
             std::array<float, 16> world{};
             cgltf_node_transform_world(&node, world.data());
-            if (node.skin != nullptr && !hasWarnedOfSkin)
-            {
-                HYOSHI_LOG_WARN("Model: '{}' is skinned, so it comes in its rest pose: pose it in Blender and "
-                                "apply the armature before exporting",
-                                node.name != nullptr ? node.name : "a mesh");
-                hasWarnedOfSkin = true;
-            }
+            const glm::mat4 transform = node.skin != nullptr ? glm::mat4(1.0f) : glm::make_mat4(world.data());
             for (size_t i = 0; i < node.mesh->primitives_count; ++i)
             {
-                AddPrimitive(*node.mesh, node.mesh->primitives[i], glm::make_mat4(world.data()));
+                AddPrimitive(*node.mesh, node.mesh->primitives[i], transform, node.skin);
             }
         }
         for (size_t i = 0; i < node.children_count; ++i)
@@ -222,12 +337,69 @@ private:
         }
     }
 
-    void AddPrimitive(const cgltf_mesh& gltfMesh, const cgltf_primitive& primitive, const glm::mat4& transform)
+    void AddNodeTree(const cgltf_node& gltfNode, int32_t parent)
+    {
+        const auto index = static_cast<uint32_t>(model.Nodes.size());
+        nodes.emplace(&gltfNode, index);
+        ModelNode node;
+        node.Name = gltfNode.name != nullptr ? gltfNode.name : "";
+        node.Parent = parent;
+        ReadRestTransform(gltfNode, node);
+        model.Nodes.push_back(std::move(node));
+        for (size_t i = 0; i < gltfNode.children_count; ++i)
+        {
+            AddNodeTree(*gltfNode.children[i], static_cast<int32_t>(index));
+        }
+    }
+
+    // A skinned primitive's vertices' joints (its skin's, as the model's), into its part's; a part's
+    // vertices that no joint moves (its other primitives', if they aren't skinned) get none.
+    void AddJoints(ModelPart& part, size_t first, size_t count, const cgltf_skin* skin, const cgltf_accessor* joints,
+                   const cgltf_accessor* weights)
+    {
+        const bool isSkinned = skin != nullptr && joints != nullptr && weights != nullptr;
+        if (!isSkinned && part.Skin.empty())
+        {
+            return;
+        }
+        part.Skin.resize(first + count);
+        if (!isSkinned)
+        {
+            return;
+        }
+        const uint32_t base = firstJoints.at(skin);
+        for (size_t i = 0; i < count && i < joints->count && i < weights->count; ++i)
+        {
+            std::array<cgltf_uint, 4> found{};
+            glm::vec4 weight{0.0f};
+            cgltf_accessor_read_uint(joints, i, found.data(), 4);
+            cgltf_accessor_read_float(weights, i, glm::value_ptr(weight), 4);
+            VertexJoints& vertex = part.Skin[first + i];
+            for (size_t k = 0; k < found.size(); ++k)
+            {
+                const auto joint = static_cast<size_t>(base) + found[k];
+                if (found[k] >= skin->joints_count || joint >= model.Joints.size() ||
+                    weight[static_cast<int>(k)] <= 0.0f)
+                {
+                    weight[static_cast<int>(k)] = 0.0f;
+                    continue;
+                }
+                vertex.Joints[k] = static_cast<uint16_t>(joint);
+            }
+            const float total = weight.x + weight.y + weight.z + weight.w;
+            vertex.Weights = total > 0.0f ? weight / total : glm::vec4(0.0f);
+        }
+    }
+
+    void AddPrimitive(const cgltf_mesh& gltfMesh, const cgltf_primitive& primitive, const glm::mat4& transform,
+                      const cgltf_skin* skin)
     {
         const cgltf_accessor* positions = nullptr;
         const cgltf_accessor* normals = nullptr;
         const cgltf_accessor* uvs = nullptr;
         const cgltf_accessor* colors = nullptr;
+        const cgltf_accessor* joints = nullptr;
+        const cgltf_accessor* weights = nullptr;
         for (size_t i = 0; i < primitive.attributes_count; ++i)
         {
             const cgltf_attribute& attribute = primitive.attributes[i];
@@ -246,6 +418,14 @@ private:
             else if (attribute.type == cgltf_attribute_type_color && attribute.index == 0)
             {
                 colors = attribute.data;
+            }
+            else if (attribute.type == cgltf_attribute_type_joints && attribute.index == 0)
+            {
+                joints = attribute.data;
+            }
+            else if (attribute.type == cgltf_attribute_type_weights && attribute.index == 0)
+            {
+                weights = attribute.data;
             }
         }
         if (primitive.type != cgltf_primitive_type_triangles || positions == nullptr)
@@ -295,6 +475,7 @@ private:
         }
 
         AddMorphs(gltfMesh, primitive, transform, model.Parts[partIndex], first);
+        AddJoints(model.Parts[partIndex], first, count, skin, joints, weights);
 
         // A mirroring transform turns triangles inside out: wind them back.
         const bool isMirrored = glm::determinant(glm::mat3(transform)) < 0.0f;
@@ -352,8 +533,9 @@ private:
     std::string path;
     ModelData model;
     std::map<const cgltf_material*, size_t> parts;
+    std::map<const cgltf_node*, uint32_t> nodes;
+    std::map<const cgltf_skin*, uint32_t> firstJoints;
     size_t skipped = 0;
-    bool hasWarnedOfSkin = false;
 };
 
 } // namespace
@@ -385,6 +567,7 @@ Result<ModelData> ReadModel(std::span<const std::byte> data, const std::string& 
     }
 
     ModelReader reader(path);
+    reader.AddSkeleton(*model);
     const cgltf_scene* scene =
         model->scene != nullptr ? model->scene : (model->scenes_count > 0 ? model->scenes : nullptr);
     if (scene != nullptr)
