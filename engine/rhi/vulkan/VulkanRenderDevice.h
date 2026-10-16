@@ -100,6 +100,10 @@ public:
 
     void SavePipelineCache() override;
     uint32_t GetValidationMessageCount() const override;
+    bool HasDepth() const override
+    {
+        return true;
+    }
     void RequestScreenshot(std::string path) override;
 
 private:
@@ -171,6 +175,11 @@ private:
     Result<void> CreateFrameResources();
     Result<void> CreateSwapchainResources();
     Result<void> CreateSwapchainRenderPass(VkFormat format);
+    // The depth buffer every render pass has (decision 0003): its format, picked once, and the image,
+    // the swapchain's size, made again with it.
+    Result<void> SelectDepthFormat();
+    Result<void> CreateDepthBuffer(VkExtent2D extent);
+    void DestroyDepthBuffer();
     void RecordScreenshotCopy(VkCommandBuffer commandBuffer, VkImage image);
     void WritePendingScreenshot();
 
@@ -198,6 +207,10 @@ private:
     VulkanSwapchain swapchain;
     VkRenderPass swapchainRenderPass = VK_NULL_HANDLE;
     VkFormat renderPassFormat = VK_FORMAT_UNDEFINED;
+    VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+    VkImage depthImage = VK_NULL_HANDLE;
+    VmaAllocation depthAllocation = VK_NULL_HANDLE;
+    VkImageView depthView = VK_NULL_HANDLE;
     bool isSwapchainDirty = false;
     // The window under the surface is gone (Android's, in the background): the surface goes, and the
     // app makes a new one (CreateSurface).

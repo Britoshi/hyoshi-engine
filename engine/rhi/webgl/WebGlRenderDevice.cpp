@@ -594,6 +594,11 @@ Result<void> WebGlRenderDevice::UpdateTexture(TextureHandle texture, const void*
 
 Result<PipelineHandle> WebGlRenderDevice::CreatePipeline(const PipelineDesc& desc)
 {
+    // 3D's settings (decision 0003), which only Vulkan has so far.
+    if (desc.Depth != DepthMode::None || desc.Cull != CullMode::None || desc.Blend == BlendMode::Additive)
+    {
+        return Error{std::string("No depth, culling, or additive blending on WebGL 2 yet (") + desc.DebugName + ")"};
+    }
     if (desc.GlesVertex.empty() || desc.GlesFragment.empty())
     {
         return Error{std::string("No GLSL ES for pipeline ") + desc.DebugName};

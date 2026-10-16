@@ -485,6 +485,12 @@ hyoshi::Result<void> Application::Initialize()
     {
         return result;
     }
+    // Without 3D the game still runs (World.IsAvailable() is false), as on devices without depth.
+    if (hyoshi::Result<void> result = world.Initialize(*device); !result)
+    {
+        HYOSHI_LOG_WARN("Running without 3D: {}", result.GetError().Message);
+        world.Shutdown();
+    }
     // The editor's panels dock, and its layout is kept apart from the debug overlay's.
     hyoshi::debug::DebugUiConfig debugUiConfig;
     if (editorLayer != nullptr)
@@ -518,7 +524,8 @@ hyoshi::Result<void> Application::Initialize()
     game.ConfigureAudio(platform, audioConfig);
     if (Result<void> result = audio->Initialize(audioConfig); result)
     {
-        services = std::make_unique<AppServices>(AppServices{platform, *device, *audio, jobs, editorLayer != nullptr});
+        services =
+            std::make_unique<AppServices>(AppServices{platform, *device, *audio, jobs, world, editorLayer != nullptr});
         if (Result<void> gameResult = game.Initialize(*services); !gameResult)
         {
             return gameResult;
@@ -782,6 +789,7 @@ void Application::Shutdown()
     text.Shutdown();
     debugUi.Shutdown();
     spriteBatch.Shutdown();
+    world.Shutdown();
     if (device)
     {
         device->Destroy(circleTexture);
@@ -847,7 +855,9 @@ void Application::RenderFrame(float deltaSeconds)
     renderPass.Clear = {0.04f, 0.04f, 0.07f, 1.0f};
     commands.BeginRenderPass(renderPass);
 
-    // The scene has drawn into the sprite batch already (RunScene).
+    // The scene has drawn into the 3D renderer and the sprite batch already (RunScene); the 3D goes
+    // first, under the 2D.
+    world.Render(commands, device->GetSwapchainExtent(), device->GetSurfaceTransform());
     const glm::vec2 canvas = camera.GetVirtualSize();
     if (isDebugVisible)
     {

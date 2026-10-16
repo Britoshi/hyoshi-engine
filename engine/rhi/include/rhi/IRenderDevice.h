@@ -83,6 +83,11 @@ public:
     virtual Extent GetSwapchainExtent() const = 0;
     virtual SurfaceTransform GetSurfaceTransform() const = 0;
 
+    // Whether render passes have a depth buffer, for pipelines with a DepthMode (3D, decision 0003).
+    // Where they don't (the web, for now), CreatePipeline refuses 3D's settings: a depth mode,
+    // culling, and additive blending.
+    virtual bool HasDepth() const = 0;
+
     // Writes the pipeline cache to DeviceConfig::PipelineCachePath now (also done on Shutdown).
     virtual void SavePipelineCache() = 0;
 

@@ -9,6 +9,7 @@
 #include "input/InputEvent.h"
 #include "platform/Platform.h"
 #include "renderer/Camera2D.h"
+#include "renderer/Renderer3D.h"
 #include "renderer/SpriteBatch.h"
 #include "renderer/TextRenderer.h"
 #include "rhi/IRenderDevice.h"
@@ -55,6 +56,8 @@ struct AppServices
     rhi::IRenderDevice& Device;
     audio::IAudioBackend& Audio;
     JobSystem& Jobs;
+    // 3D (decision 0003), drawn under the 2D; World.IsAvailable() says whether the device has it.
+    renderer::Renderer3D& World;
     // Running under the game's editor (ADR 0002): skip what suits only players, such as turning the
     // window to the saved orientation.
     bool IsEditor = false;
@@ -187,6 +190,7 @@ private:
     platform::Platform platform;
     std::unique_ptr<rhi::IRenderDevice> device;
     renderer::SpriteBatch spriteBatch;
+    renderer::Renderer3D world;
     renderer::TextRenderer text;
     renderer::Camera2D camera;
     debug::DebugUi debugUi;

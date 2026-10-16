@@ -1,6 +1,9 @@
 add_library(hyoshi_renderer STATIC
     src/Camera2D.cpp
+    src/Camera3D.cpp
     src/Image.cpp
+    src/Mesh.cpp
+    src/Renderer3D.cpp
     src/SpriteBatch.cpp
     src/TextRenderer.cpp
     src/ThirdPartyImplementations.cpp
@@ -11,6 +14,7 @@ target_include_directories(hyoshi_renderer PUBLIC include)
 target_link_libraries(hyoshi_renderer PUBLIC hyoshi::core hyoshi::rhi glm::glm PRIVATE hyoshi_stb)
 
 hyoshi_add_shaders(hyoshi_renderer
+    ${PROJECT_SOURCE_DIR}/shaders/Mesh.slang
     ${PROJECT_SOURCE_DIR}/shaders/Sprite.slang
 )
 

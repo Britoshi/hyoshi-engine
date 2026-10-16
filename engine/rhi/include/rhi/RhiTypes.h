@@ -55,7 +55,9 @@ struct ClearColor
     float A = 1.0f;
 };
 
-// For now every render pass targets the swapchain, clears it, and stores the result.
+// For now every render pass targets the swapchain, clears it, and stores the result. Where the
+// device has depth (IRenderDevice::HasDepth), the pass has a depth buffer too, cleared to the far
+// plane (1) and not kept.
 struct RenderPassDesc
 {
     ClearColor Clear;
@@ -164,7 +166,33 @@ enum class BlendMode
 {
     Opaque,
     // Straight (non-premultiplied) alpha.
-    Alpha
+    Alpha,
+    // The color times its alpha, added to what's there: light, glows.
+    Additive
+};
+
+// How a pipeline uses the depth buffer (IRenderDevice::HasDepth): None ignores it; Test draws only
+// what's nearer than what's there (smaller depth); TestAndWrite also keeps its own depth.
+enum class DepthMode : uint8_t
+{
+    None,
+    Test,
+    TestAndWrite
+};
+
+// Which triangles aren't drawn, by which way they face (FrontFace).
+enum class CullMode : uint8_t
+{
+    None,
+    Back,
+    Front
+};
+
+// The winding of a front-facing triangle as it lands in clip space.
+enum class FrontFace : uint8_t
+{
+    CounterClockwise,
+    Clockwise
 };
 
 struct PipelineDesc
@@ -186,6 +214,10 @@ struct PipelineDesc
 
     PrimitiveTopology Topology = PrimitiveTopology::TriangleList;
     BlendMode Blend = BlendMode::Opaque;
+    // 3D (decision 0003); the defaults are 2D's: no depth, nothing culled.
+    DepthMode Depth = DepthMode::None;
+    CullMode Cull = CullMode::None;
+    FrontFace Front = FrontFace::CounterClockwise;
 
     // Bytes of push constants visible to both stages. 128 is the minimum every device supports.
     uint32_t PushConstantSize = 0;

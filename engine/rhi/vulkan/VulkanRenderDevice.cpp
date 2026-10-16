@@ -148,15 +148,16 @@ void VulkanCommandList::BeginRenderPass(const RenderPassDesc& desc)
 
     const VkExtent2D extent = device.swapchain.GetExtent();
 
-    VkClearValue clearValue{};
-    clearValue.color = {{desc.Clear.R, desc.Clear.G, desc.Clear.B, desc.Clear.A}};
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = {{desc.Clear.R, desc.Clear.G, desc.Clear.B, desc.Clear.A}};
+    clearValues[1].depthStencil = {1.0f, 0};
 
     VkRenderPassBeginInfo beginInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     beginInfo.renderPass = device.swapchainRenderPass;
     beginInfo.framebuffer = device.swapchain.GetFramebuffer(device.imageIndex);
     beginInfo.renderArea = {{0, 0}, extent};
-    beginInfo.clearValueCount = 1;
-    beginInfo.pClearValues = &clearValue;
+    beginInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    beginInfo.pClearValues = clearValues.data();
     vkCmdBeginRenderPass(commandBuffer, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
     isInRenderPass = true;
 
@@ -305,6 +306,10 @@ Result<void> VulkanRenderDevice::Initialize(const DeviceConfig& config, platform
     }
     if (result)
     {
+        result = SelectDepthFormat();
+    }
+    if (result)
+    {
         result = CreateLogicalDevice();
     }
     if (result)
@@ -387,6 +392,7 @@ void VulkanRenderDevice::Shutdown()
         }
 
         swapchain.Destroy();
+        DestroyDepthBuffer();
         if (swapchainRenderPass != VK_NULL_HANDLE)
         {
             vkDestroyRenderPass(device, swapchainRenderPass, nullptr);
@@ -746,7 +752,11 @@ Result<void> VulkanRenderDevice::CreateSwapchainResources()
         }
     }
 
-    if (Result<void> result = swapchain.CreateFramebuffers(swapchainRenderPass); !result)
+    if (Result<void> result = CreateDepthBuffer(swapchain.GetExtent()); !result)
+    {
+        return result;
+    }
+    if (Result<void> result = swapchain.CreateFramebuffers(swapchainRenderPass, depthView); !result)
     {
         return result;
     }
@@ -774,25 +784,43 @@ Result<void> VulkanRenderDevice::CreateSwapchainRenderPass(VkFormat format)
     attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
+    // Depth: cleared, never stored, so tile-based GPUs keep it on chip.
+    VkAttachmentDescription depthAttachment{};
+    depthAttachment.format = depthFormat;
+    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    const std::array<VkAttachmentDescription, 2> attachments{attachment, depthAttachment};
+
     VkAttachmentReference colorReference{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference depthReference{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorReference;
+    subpass.pDepthStencilAttachment = &depthReference;
 
-    // Wait for the acquired image (the submit waits on the acquire semaphore at this stage).
+    // Wait for the acquired image (the submit waits on the acquire semaphore at this stage), and,
+    // since one depth buffer serves every frame in flight, for the frame before to finish with it.
+    constexpr VkPipelineStageFlags DEPTH_STAGES =
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
     VkSubpassDependency dependency{};
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.srcAccessMask = 0;
-    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | DEPTH_STAGES;
+    dependency.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | DEPTH_STAGES;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                               VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
     VkRenderPassCreateInfo createInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-    createInfo.attachmentCount = 1;
-    createInfo.pAttachments = &attachment;
+    createInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    createInfo.pAttachments = attachments.data();
     createInfo.subpassCount = 1;
     createInfo.pSubpasses = &subpass;
     createInfo.dependencyCount = 1;
@@ -806,6 +834,81 @@ Result<void> VulkanRenderDevice::CreateSwapchainRenderPass(VkFormat format)
     }
     renderPassFormat = format;
     return {};
+}
+
+Result<void> VulkanRenderDevice::SelectDepthFormat()
+{
+    // The first the device can attach, most precise first.
+    for (const VkFormat format : {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D16_UNORM})
+    {
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &properties);
+        if ((properties.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0)
+        {
+            depthFormat = format;
+            return {};
+        }
+    }
+    return Error{"The GPU has no depth format to draw with"};
+}
+
+Result<void> VulkanRenderDevice::CreateDepthBuffer(VkExtent2D extent)
+{
+    DestroyDepthBuffer();
+
+    VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = depthFormat;
+    imageInfo.extent = {extent.width, extent.height, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    // Lazily allocated memory, where there is some (tile-based GPUs: phones), is never backed while the
+    // buffer stays on chip; elsewhere, ordinary device memory.
+    VmaAllocationCreateInfo allocationInfo{};
+    allocationInfo.usage = VMA_MEMORY_USAGE_GPU_LAZILY_ALLOCATED;
+    if (vmaCreateImage(allocator, &imageInfo, &allocationInfo, &depthImage, &depthAllocation, nullptr) != VK_SUCCESS)
+    {
+        allocationInfo.usage = VMA_MEMORY_USAGE_AUTO;
+        if (Result<void> result =
+                CheckVk(vmaCreateImage(allocator, &imageInfo, &allocationInfo, &depthImage, &depthAllocation, nullptr),
+                        "vmaCreateImage (depth)");
+            !result)
+        {
+            depthImage = VK_NULL_HANDLE;
+            depthAllocation = VK_NULL_HANDLE;
+            return result;
+        }
+    }
+
+    VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    viewInfo.image = depthImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = depthFormat;
+    const VkImageAspectFlags aspects = depthFormat == VK_FORMAT_D24_UNORM_S8_UINT
+                                           ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
+                                           : VK_IMAGE_ASPECT_DEPTH_BIT;
+    viewInfo.subresourceRange = {aspects, 0, 1, 0, 1};
+    return CheckVk(vkCreateImageView(device, &viewInfo, nullptr, &depthView), "vkCreateImageView (depth)");
+}
+
+void VulkanRenderDevice::DestroyDepthBuffer()
+{
+    if (depthView != VK_NULL_HANDLE)
+    {
+        vkDestroyImageView(device, depthView, nullptr);
+        depthView = VK_NULL_HANDLE;
+    }
+    if (depthImage != VK_NULL_HANDLE)
+    {
+        vmaDestroyImage(allocator, depthImage, depthAllocation);
+        depthImage = VK_NULL_HANDLE;
+        depthAllocation = VK_NULL_HANDLE;
+    }
 }
 
 Result<void> VulkanRenderDevice::CreateSurface()
@@ -841,6 +944,7 @@ void VulkanRenderDevice::DestroySurface()
     MarkAllSubmissionsComplete();
     pipelineCache.Save();
     swapchain.Destroy();
+    DestroyDepthBuffer();
     vkDestroySurfaceKHR(instance, surface, nullptr);
     surface = VK_NULL_HANDLE;
     isSurfaceLost = false;
@@ -925,9 +1029,18 @@ Result<PipelineHandle> VulkanRenderDevice::CreatePipeline(const PipelineDesc& de
 
     VkPipelineRasterizationStateCreateInfo rasterization{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     rasterization.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterization.cullMode = VK_CULL_MODE_NONE;
-    rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterization.cullMode = desc.Cull == CullMode::Back    ? VK_CULL_MODE_BACK_BIT
+                             : desc.Cull == CullMode::Front ? VK_CULL_MODE_FRONT_BIT
+                                                            : VK_CULL_MODE_NONE;
+    rasterization.frontFace =
+        desc.Front == FrontFace::Clockwise ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterization.lineWidth = 1.0f;
+
+    // Every pipeline has one, since the render pass has a depth buffer; 2D's leave it alone.
+    VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthStencil.depthTestEnable = desc.Depth != DepthMode::None ? VK_TRUE : VK_FALSE;
+    depthStencil.depthWriteEnable = desc.Depth == DepthMode::TestAndWrite ? VK_TRUE : VK_FALSE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
     VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -943,6 +1056,16 @@ Result<PipelineHandle> VulkanRenderDevice::CreatePipeline(const PipelineDesc& de
         blendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
         blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
         blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        blendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    }
+    else if (desc.Blend == BlendMode::Additive)
+    {
+        blendAttachment.blendEnable = VK_TRUE;
+        blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        blendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+        blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
         blendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
     }
 
@@ -994,6 +1117,7 @@ Result<PipelineHandle> VulkanRenderDevice::CreatePipeline(const PipelineDesc& de
         pipelineInfo.pViewportState = &viewportState;
         pipelineInfo.pRasterizationState = &rasterization;
         pipelineInfo.pMultisampleState = &multisample;
+        pipelineInfo.pDepthStencilState = &depthStencil;
         pipelineInfo.pColorBlendState = &colorBlend;
         pipelineInfo.pDynamicState = &dynamicState;
         pipelineInfo.layout = data.Layout;

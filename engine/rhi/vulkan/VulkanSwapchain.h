@@ -27,7 +27,8 @@ public:
     // Creates the swapchain, or recreates it in place if one exists. Returns false without an error
     // when the surface currently has zero area (a minimized window); try again later.
     Result<bool> Create(const SwapchainCreateInfo& info);
-    Result<void> CreateFramebuffers(VkRenderPass renderPass);
+    // One per image, each with the image and the depth buffer's view.
+    Result<void> CreateFramebuffers(VkRenderPass renderPass, VkImageView depthView);
     void Destroy();
 
     bool IsValid() const

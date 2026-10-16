@@ -106,6 +106,10 @@ public:
 
     void SavePipelineCache() override;
     uint32_t GetValidationMessageCount() const override;
+    bool HasDepth() const override
+    {
+        return false;
+    }
     void RequestScreenshot(std::string path) override;
 
 private:

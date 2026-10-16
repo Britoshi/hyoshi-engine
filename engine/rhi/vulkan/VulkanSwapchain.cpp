@@ -222,7 +222,7 @@ Result<bool> VulkanSwapchain::Create(const SwapchainCreateInfo& info)
     return true;
 }
 
-Result<void> VulkanSwapchain::CreateFramebuffers(VkRenderPass renderPass)
+Result<void> VulkanSwapchain::CreateFramebuffers(VkRenderPass renderPass, VkImageView depthView)
 {
     for (VkFramebuffer framebuffer : framebuffers)
     {
@@ -232,10 +232,11 @@ Result<void> VulkanSwapchain::CreateFramebuffers(VkRenderPass renderPass)
 
     for (size_t i = 0; i < imageViews.size(); ++i)
     {
+        const std::array<VkImageView, 2> attachments{imageViews[i], depthView};
         VkFramebufferCreateInfo createInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
         createInfo.renderPass = renderPass;
-        createInfo.attachmentCount = 1;
-        createInfo.pAttachments = &imageViews[i];
+        createInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        createInfo.pAttachments = attachments.data();
         createInfo.width = extent.width;
         createInfo.height = extent.height;
         createInfo.layers = 1;
