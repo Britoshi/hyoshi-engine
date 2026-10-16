@@ -341,6 +341,9 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
         constants.Up = directionToObject * glm::vec3(0.0f, 1.0f, 0.0f);
         constants.BaseColor = PackMeshColor(item.Surface.BaseColor);
         constants.Colors = colors[slot];
+        // The light's alpha (unused by the light) carries how toon the surface is.
+        const auto toon = static_cast<uint32_t>(std::lround(std::clamp(item.Surface.Toon, 0.0f, 1.0f) * 255.0f));
+        constants.Colors[0] = (constants.Colors[0] & 0x00FFFFFFU) | (toon << 24U);
         commands.PushConstants(&constants, sizeof(constants));
         commands.DrawIndexed(mesh->IndexCount, 1, 0, 0, 0);
     }

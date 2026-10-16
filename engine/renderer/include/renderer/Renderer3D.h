@@ -40,6 +40,9 @@ struct Material
     float Emission = 0.0f;
     // Light along its silhouette, as if from behind it.
     float Rim = 0.0f;
+    // 0, shaded smoothly; 1, as a cartoon is (toon, cel): the light's side and the shadow's split by
+    // a soft edge, the shadow tinted, the rim a band; between, both. In steps of 1/255.
+    float Toon = 0.0f;
     MaterialBlend Blend = MaterialBlend::Opaque;
     // Both faces drawn and lit, for thin things (a page, a cloth); otherwise backs aren't drawn.
     bool IsTwoSided = false;
