@@ -23,6 +23,7 @@ These work in any app built on the engine, for scripted runs and tests:
 | `HYOSHI_STRESS_SURFACE=1` | Every 10 frames, alternately resize the window and destroy and recreate the surface |
 | `HYOSHI_STRESS_AUDIO=1` | Stop the audio device for the last 200 ms of every 3 seconds |
 | `HYOSHI_STRESS_SEEK=1` | Clock demo: seek to a random position every 1.5 seconds |
+| `HYOSHI_STRESS_REOPEN=1` | Close the audio output and open it again every 2 seconds (`IAudioBackend::Reopen`, a game's Restart audio), the music playing on |
 | `HYOSHI_SPRITES=10000` | Add bouncing sprites, for renderer stress tests |
 | `HYOSHI_MUSIC=song.ogg`, `HYOSHI_BPM=128`, `HYOSHI_FIRST_BEAT_MS=350` | Clock demo: stream this file instead of the generated metronome track, at this tempo |
 

@@ -29,6 +29,7 @@ public:
     void Update() override;
     void Suspend() override;
     void Resume() override;
+    Result<void> Reopen(const std::string& asioDriver) override;
 
     uint32_t GetSampleRate() const override;
 
@@ -74,7 +75,13 @@ private:
     void Retire(std::unique_ptr<PcmBuffer> buffer);
     void RetireMusic();
     SoundHandle StartVoice(SoundId sound, Bus bus, DspFrame musicFrame, float volume);
-    Result<void> OpenAsio(const AudioConfig& config);
+    // The output: an ASIO driver, or the system's device for an empty name. Each makes the mixer
+    // at its rate the first time; reopened, it plays at the mixer's.
+    Result<void> OpenOutput(const std::string& asioDriver);
+    Result<void> OpenAsio(const std::string& driverName);
+    Result<void> OpenDevice();
+    // Stops and closes the output, after which nothing calls back. The mixer stays.
+    void CloseOutput();
 
     std::unique_ptr<ma_device> device;
 #if defined(_WIN32)
@@ -84,6 +91,9 @@ private:
     std::string fallbackReason;
     std::unique_ptr<Mixer> mixer;
     HostClockFn hostClock = nullptr;
+    // From Initialize's AudioConfig, for outputs opened later.
+    uint32_t periodMs = 0;
+    uint32_t voiceCount = 0;
     bool isDeviceStarted = false;
 
     // Main thread state.

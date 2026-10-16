@@ -78,6 +78,10 @@ constexpr HostTimeNs AUDIO_STRESS_STOP_NS = 200 * hyoshi::NS_PER_MS;
 // HYOSHI_STRESS_SEEK=1: seek to a pseudo-random position this often.
 constexpr HostTimeNs SEEK_STRESS_PERIOD_NS = 1'500 * hyoshi::NS_PER_MS;
 
+// HYOSHI_STRESS_REOPEN=1: close the audio output and open it again this often, as a game's Restart
+// audio does (IAudioBackend::Reopen), the music and the song clock carrying on.
+constexpr HostTimeNs REOPEN_STRESS_PERIOD_NS = 2'000 * hyoshi::NS_PER_MS;
+
 // The engine's own assets sit under this folder in the app's assets (cmake/HyoshiApp.cmake).
 constexpr const char* ENGINE_ASSETS = "engine/";
 
@@ -161,6 +165,9 @@ int Application::Run()
     const bool stressSeek = std::getenv("HYOSHI_STRESS_SEEK") != nullptr;
     HostTimeNs nextStressSeek = startTime + SEEK_STRESS_PERIOD_NS;
     uint32_t seekStressCycles = 0;
+    const bool stressReopen = std::getenv("HYOSHI_STRESS_REOPEN") != nullptr;
+    HostTimeNs nextStressReopen = startTime + REOPEN_STRESS_PERIOD_NS;
+    uint32_t reopenStressCycles = 0;
     std::optional<HostTimeNs> lastFrameTime;
     uint64_t frameCount = 0;
     uint32_t stressCycles = 0;
@@ -196,9 +203,10 @@ int Application::Run()
 
         if (exitAfterMs && platform.GetHostTimeNs() - startTime >= *exitAfterMs * hyoshi::NS_PER_MS)
         {
-            HYOSHI_LOG_INFO("HYOSHI_EXIT_AFTER_MS elapsed after {} frames ({} surface, {} audio, {} seek stress "
-                            "cycles), {:.2f} ms average frame time, exiting",
-                            frameCount, stressCycles, audioStressCycles, seekStressCycles, GetAverageFrameMs());
+            HYOSHI_LOG_INFO("HYOSHI_EXIT_AFTER_MS elapsed after {} frames ({} surface, {} audio, {} seek, {} reopen "
+                            "stress cycles), {:.2f} ms average frame time, exiting",
+                            frameCount, stressCycles, audioStressCycles, seekStressCycles, reopenStressCycles,
+                            GetAverageFrameMs());
             break;
         }
 
@@ -311,6 +319,19 @@ int Application::Run()
             clockDemo->SeekTo(position(random));
             nextStressSeek = now + SEEK_STRESS_PERIOD_NS;
             ++seekStressCycles;
+        }
+
+        if (stressReopen && audio && now >= nextStressReopen)
+        {
+            // The output playing now, opened again.
+            const hyoshi::audio::AudioDeviceInfo info = audio->GetDeviceInfo();
+            if (Result<void> result = audio->Reopen(info.BackendName == "ASIO" ? info.DeviceName : std::string());
+                !result)
+            {
+                HYOSHI_LOG_ERROR("HYOSHI_STRESS_REOPEN: {}", result.GetError().Message);
+            }
+            nextStressReopen = now + REOPEN_STRESS_PERIOD_NS;
+            ++reopenStressCycles;
         }
 
         if (audio)

@@ -6,6 +6,7 @@
 #include "core/Result.h"
 
 #include <memory>
+#include <string>
 
 namespace hyoshi::audio
 {
@@ -27,6 +28,16 @@ public:
     // Stops and restarts the device, for the app going to the background and back.
     virtual void Suspend() = 0;
     virtual void Resume() = 0;
+    // Closes the output and opens the one named (an ASIO driver, as AudioConfig::AsioDriver, or
+    // empty for the system's device) while everything plays on: the sounds, the music and where it
+    // is, at the sample rate audio started at (the system's device resamples to its own; an ASIO
+    // driver is asked to play at it). If that output won't open, the one before comes back, and the
+    // error, which GetDeviceInfo's FallbackReason also gives, says why. Song clocks see a route
+    // change, and take the new output's latency.
+    virtual Result<void> Reopen([[maybe_unused]] const std::string& asioDriver)
+    {
+        return Error{"This audio backend can't reopen its output"};
+    }
 
     // Sounds and music must be decoded at this rate.
     virtual uint32_t GetSampleRate() const = 0;

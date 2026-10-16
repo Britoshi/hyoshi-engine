@@ -31,8 +31,9 @@ public:
     AsioOutput(const AsioOutput&) = delete;
     AsioOutput& operator=(const AsioOutput&) = delete;
 
-    // driverName: as ListAsioDrivers names it.
-    Result<void> Open(const std::string& driverName, RenderFn render, void* user);
+    // driverName: as ListAsioDrivers names it. wantedRate: 0 plays at the driver's own sample
+    // rate; another asks the driver to play at it, and fails if it can't.
+    Result<void> Open(const std::string& driverName, RenderFn render, void* user, uint32_t wantedRate = 0);
     void Close();
     Result<void> Start();
     void Stop();

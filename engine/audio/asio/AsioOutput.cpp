@@ -345,7 +345,7 @@ AsioOutput::~AsioOutput()
     Close();
 }
 
-Result<void> AsioOutput::Open(const std::string& name, RenderFn renderFn, void* user)
+Result<void> AsioOutput::Open(const std::string& name, RenderFn renderFn, void* user, uint32_t wantedRate)
 {
     if (driver != nullptr)
     {
@@ -396,6 +396,21 @@ Result<void> AsioOutput::Open(const std::string& name, RenderFn renderFn, void* 
     {
         Close();
         return Error{"The ASIO driver '" + name + "' has no sample rate"};
+    }
+    if (wantedRate != 0 && std::lround(rate) != static_cast<long>(wantedRate))
+    {
+        // Read back, since some drivers take a new rate later, and until then would play these
+        // buffers at the old one.
+        const double asked = rate;
+        if (!asio::IsOk(driver->CanSampleRate(static_cast<double>(wantedRate))) ||
+            !asio::IsOk(driver->SetSampleRate(static_cast<double>(wantedRate))) ||
+            !asio::IsOk(driver->GetSampleRate(&rate)) || std::lround(rate) != static_cast<long>(wantedRate))
+        {
+            Close();
+            return Error{std::format("The ASIO driver '{}' plays at {:.0f} Hz and can't at {} Hz, the rate audio "
+                                     "started at; restart the game to use it",
+                                     name, asked, wantedRate)};
+        }
     }
     sampleRate = static_cast<uint32_t>(std::lround(rate));
     if (Result<void> result = CreateBuffers(); !result)
