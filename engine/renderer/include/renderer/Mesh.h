@@ -55,4 +55,11 @@ void AddSurface(MeshData& mesh, const glm::mat4& transform, uint32_t columns, ui
 // A flat square from -0.5 to 0.5 in x and z, facing up (+y), its texture's top toward -z.
 void AddPlane(MeshData& mesh, const glm::mat4& transform, uint32_t columns = 1, uint32_t rows = 1, Color color = WHITE);
 
+// `mesh` cut into `count` slabs across `axis` (a unit vector), evenly from `from` to `to` along it:
+// slab i holds what lies between the i-th cut and the next, the first slab everything before `from`
+// too and the last everything past `to`. Triangles that cross a cut are split there, the new
+// points' normals, texture coordinates, and colors in between. For effects that pull a shape apart,
+// such as a glitch's slices.
+std::vector<MeshData> SliceMesh(const MeshData& mesh, glm::vec3 axis, float from, float to, uint32_t count);
+
 } // namespace hyoshi::renderer

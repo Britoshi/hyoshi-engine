@@ -43,9 +43,12 @@ struct Material
     MaterialBlend Blend = MaterialBlend::Opaque;
     // Both faces drawn and lit, for thin things (a page, a cloth); otherwise backs aren't drawn.
     bool IsTwoSided = false;
+    // Which of the scene's lightings lights it (Renderer3D::SetLighting): a room by candlelight and
+    // the night outside its window, say.
+    uint8_t LightingSlot = 0;
 };
 
-// The scene's light: one, from a direction, with an ambient that runs from the ground's color (on
+// A light: one, from a direction, with an ambient that runs from the ground's color (on
 // what faces down) to the sky's (on what faces up), and fog that fades distant things into its color.
 struct Lighting
 {
@@ -87,9 +90,14 @@ public:
     {
         return camera;
     }
-    void SetLighting(const Lighting& newLighting)
+    // A scene has up to LIGHTING_SLOTS lightings; each material takes one (Material::LightingSlot).
+    static constexpr size_t LIGHTING_SLOTS = 4;
+    void SetLighting(const Lighting& newLighting, size_t slot = 0)
     {
-        lighting = newLighting;
+        if (slot < LIGHTING_SLOTS)
+        {
+            lightings[slot] = newLighting;
+        }
     }
 
     // Draws the mesh this frame, placed by `transform` (moves, turns, and sizes; sizes alike on each
@@ -128,7 +136,7 @@ private:
     rhi::TextureHandle whiteTexture;
     HandlePool<GpuMesh, MeshTag> meshes;
     Camera3D camera;
-    Lighting lighting;
+    std::array<Lighting, LIGHTING_SLOTS> lightings{};
     std::vector<DrawItem> draws;
 };
 

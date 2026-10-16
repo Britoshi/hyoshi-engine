@@ -10,6 +10,7 @@ add_executable(hyoshi_unit_tests
     ImageTests.cpp
     InputQueueTests.cpp
     ManiaJudgeTests.cpp
+    MeshTests.cpp
     MixedModeTests.cpp
     MixerTests.cpp
     MusicStreamTests.cpp

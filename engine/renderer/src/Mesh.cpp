@@ -1,5 +1,6 @@
 #include "renderer/Mesh.h"
 
+#include <glm/common.hpp>
 #include <glm/geometric.hpp>
 #include <glm/gtc/constants.hpp>
 #include <glm/mat3x3.hpp>
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <vector>
 
 namespace hyoshi::renderer
 {
@@ -70,6 +72,48 @@ void AddGrid(MeshData& mesh, const glm::mat4& transform, uint32_t columns, uint3
             mesh.Indices.insert(mesh.Indices.end(), {topLeft, bottomLeft, topRight, topRight, bottomLeft, bottomRight});
         }
     }
+}
+
+// A vertex between `a` and `b`, `t` of the way.
+MeshVertex Interpolate(const MeshVertex& a, const MeshVertex& b, float t)
+{
+    MeshVertex between;
+    between.Position = glm::mix(a.Position, b.Position, t);
+    const glm::vec3 normal = glm::mix(a.Normal, b.Normal, t);
+    between.Normal = glm::length(normal) > 0.0f ? glm::normalize(normal) : a.Normal;
+    between.Uv = glm::mix(a.Uv, b.Uv, t);
+    between.Color = 0;
+    for (uint32_t shift = 0; shift < 32; shift += 8)
+    {
+        const auto channelA = static_cast<float>((a.Color >> shift) & 0xFFU);
+        const auto channelB = static_cast<float>((b.Color >> shift) & 0xFFU);
+        const auto channel = static_cast<uint32_t>(std::lround(channelA + ((channelB - channelA) * t)));
+        between.Color |= std::min(channel, 0xFFU) << shift;
+    }
+    return between;
+}
+
+// What of `polygon` lies where `distance` (along the slicing axis) is at least `limit` times
+// `side` (1: keep from the limit on; -1: keep up to it), in order, cut where it crosses.
+std::vector<MeshVertex> ClipPolygon(const std::vector<MeshVertex>& polygon, glm::vec3 axis, float limit, float side)
+{
+    std::vector<MeshVertex> kept;
+    for (size_t i = 0; i < polygon.size(); ++i)
+    {
+        const MeshVertex& current = polygon[i];
+        const MeshVertex& next = polygon[(i + 1) % polygon.size()];
+        const float currentInside = (glm::dot(current.Position, axis) - limit) * side;
+        const float nextInside = (glm::dot(next.Position, axis) - limit) * side;
+        if (currentInside >= 0.0f)
+        {
+            kept.push_back(current);
+        }
+        if ((currentInside >= 0.0f) != (nextInside >= 0.0f))
+        {
+            kept.push_back(Interpolate(current, next, currentInside / (currentInside - nextInside)));
+        }
+    }
+    return kept;
 }
 
 } // namespace
@@ -174,6 +218,44 @@ void AddSphere(MeshData& mesh, const glm::mat4& transform, uint32_t segments, ui
     AddGrid(
         mesh, transform, std::max(segments, 3U), std::max(rings, 2U), [&unit](glm::vec2 uv) { return 0.5f * unit(uv); },
         unit, color);
+}
+
+std::vector<MeshData> SliceMesh(const MeshData& mesh, glm::vec3 axis, float from, float to, uint32_t count)
+{
+    count = std::max(count, 1U);
+    std::vector<MeshData> slabs(count);
+    const float step = (to - from) / static_cast<float>(count);
+    for (size_t index = 0; index + 2 < mesh.Indices.size(); index += 3)
+    {
+        const std::vector<MeshVertex> triangle{mesh.Vertices[mesh.Indices[index]],
+                                               mesh.Vertices[mesh.Indices[index + 1]],
+                                               mesh.Vertices[mesh.Indices[index + 2]]};
+        for (uint32_t slab = 0; slab < count; ++slab)
+        {
+            std::vector<MeshVertex> piece = triangle;
+            if (slab > 0)
+            {
+                piece = ClipPolygon(piece, axis, from + (step * static_cast<float>(slab)), 1.0f);
+            }
+            if (slab + 1 < count && piece.size() >= 3)
+            {
+                piece = ClipPolygon(piece, axis, from + (step * static_cast<float>(slab + 1)), -1.0f);
+            }
+            if (piece.size() < 3)
+            {
+                continue;
+            }
+            // A fan keeps the triangle's winding.
+            MeshData& out = slabs[slab];
+            const auto first = static_cast<uint32_t>(out.Vertices.size());
+            out.Vertices.insert(out.Vertices.end(), piece.begin(), piece.end());
+            for (uint32_t corner = 1; corner + 1 < piece.size(); ++corner)
+            {
+                out.Indices.insert(out.Indices.end(), {first, first + corner, first + corner + 1});
+            }
+        }
+    }
+    return slabs;
 }
 
 } // namespace hyoshi::renderer

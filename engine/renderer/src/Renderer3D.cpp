@@ -299,9 +299,15 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
                              });
 
     const glm::mat4 clipFromWorld = camera.GetClipFromWorld(swapchainExtent, surfaceTransform);
-    const glm::vec3 toLight = glm::normalize(lighting.Direction);
-    const std::array<uint32_t, 4> colors{PackMeshColor(lighting.Light), PackMeshColor(lighting.Sky),
-                                         PackMeshColor(lighting.Ground), PackFog(lighting.Fog, lighting.FogDensity)};
+    std::array<glm::vec3, LIGHTING_SLOTS> toLights{};
+    std::array<std::array<uint32_t, 4>, LIGHTING_SLOTS> colors{};
+    for (size_t slot = 0; slot < LIGHTING_SLOTS; ++slot)
+    {
+        const Lighting& lighting = lightings[slot];
+        toLights[slot] = glm::normalize(lighting.Direction);
+        colors[slot] = {PackMeshColor(lighting.Light), PackMeshColor(lighting.Sky), PackMeshColor(lighting.Ground),
+                        PackFog(lighting.Fog, lighting.FogDensity)};
+    }
     size_t boundPipeline = PIPELINE_COUNT;
     for (const DrawItem& item : draws)
     {
@@ -320,6 +326,7 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
         commands.BindIndexBuffer(mesh->Indices, 0, rhi::IndexType::UInt32);
 
         // The light and the camera moved into the object's space, where its normals are.
+        const size_t slot = std::min<size_t>(item.Surface.LightingSlot, LIGHTING_SLOTS - 1);
         const glm::mat4 objectFromWorld = glm::inverse(item.Transform);
         const glm::mat3 directionToObject(objectFromWorld);
         const glm::mat4 clipFromObject = clipFromWorld * item.Transform;
@@ -328,12 +335,12 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
         {
             constants.ClipColumns[static_cast<size_t>(column)] = clipFromObject[column];
         }
-        constants.LightDirection = glm::vec4(directionToObject * toLight, item.Surface.Emission);
+        constants.LightDirection = glm::vec4(directionToObject * toLights[slot], item.Surface.Emission);
         constants.CameraPosition =
             glm::vec4(glm::vec3(objectFromWorld * glm::vec4(camera.Position, 1.0f)), item.Surface.Rim);
         constants.Up = directionToObject * glm::vec3(0.0f, 1.0f, 0.0f);
         constants.BaseColor = PackMeshColor(item.Surface.BaseColor);
-        constants.Colors = colors;
+        constants.Colors = colors[slot];
         commands.PushConstants(&constants, sizeof(constants));
         commands.DrawIndexed(mesh->IndexCount, 1, 0, 0, 0);
     }
