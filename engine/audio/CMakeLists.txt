@@ -28,4 +28,12 @@ if(APPLE)
                                                "-framework AudioToolbox")
 endif()
 
+# The decoders (miniaudio's, its resampler, and stb_vorbis) are optimized in debug builds too (see
+# Mp3Backend.cpp and ThirdPartyImplementations.cpp, which do it for MSVC): unoptimized, opening a
+# song, finding a preview's place in it, and decoding ahead all take several times longer.
+if(NOT MSVC)
+    set_source_files_properties(miniaudio/Mp3Backend.cpp miniaudio/ThirdPartyImplementations.cpp
+        PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O2>")
+endif()
+
 hyoshi_set_warnings(hyoshi_audio)

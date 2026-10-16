@@ -43,6 +43,9 @@ public:
     bool ConsumeResetRequest();
     // Makes the buffers again at the driver's new size, back at the sample rate it was opened at.
     Result<void> Reset();
+    // True once after the driver said only its latencies changed; ReadLatencies reads them again.
+    bool ConsumeLatencyChange();
+    void ReadLatencies();
 
     // Opens the driver's own settings window. False if it has none.
     bool ShowControlPanel();
@@ -68,6 +71,7 @@ public:
     // Called by the driver.
     void OnBufferSwitch(int32_t bufferIndex);
     void RequestReset();
+    void RequestLatencyRead();
 
 private:
     Result<void> CreateBuffers();
@@ -91,6 +95,7 @@ private:
     // The render function's interleaved output.
     std::vector<float> scratch;
     std::atomic<bool> isResetRequested{false};
+    std::atomic<bool> isLatencyChanged{false};
 };
 
 } // namespace hyoshi::audio

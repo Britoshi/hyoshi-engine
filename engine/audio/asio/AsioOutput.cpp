@@ -169,11 +169,18 @@ long OnMessage(long selector, long value, void* /*message*/, double* /*option*/)
                    : 0;
     case asio::ENGINE_VERSION:
         return 2;
-    // A new buffer size or latency (the driver's control panel): make the buffers again.
+    // A new buffer size (the driver's control panel), or the driver asks: make the buffers again.
     case asio::RESET_REQUEST:
     case asio::BUFFER_SIZE_CHANGE:
-    case asio::LATENCIES_CHANGED:
         OnSampleRateDidChange(0.0);
+        return 1;
+    // Only its latencies changed: read them again, as the spec asks (and PortAudio and RtAudio do).
+    // Making the buffers again would stop the music meanwhile.
+    case asio::LATENCIES_CHANGED:
+        if (AsioOutput* output = activeOutput.load(std::memory_order_acquire); output != nullptr)
+        {
+            output->RequestLatencyRead();
+        }
         return 1;
     // Lost samples; nothing to redo, since the song clock follows the callbacks.
     case asio::RESYNC_REQUEST:
@@ -470,10 +477,7 @@ Result<void> AsioOutput::CreateBuffers()
         }
     }
 
-    long inputLatency = 0;
-    long outputLatency = 0;
-    driver->GetLatencies(&inputLatency, &outputLatency);
-    outputLatencyFrames = outputLatency > 0 ? static_cast<uint32_t>(outputLatency) : bufferFrames;
+    ReadLatencies();
     // Drivers that take it are told each buffer is ready as soon as it's written, rather than at
     // the next switch.
     canSignalOutputReady = asio::IsOk(driver->OutputReady());
@@ -542,6 +546,23 @@ bool AsioOutput::ConsumeResetRequest()
     return isResetRequested.exchange(false);
 }
 
+bool AsioOutput::ConsumeLatencyChange()
+{
+    return isLatencyChanged.exchange(false);
+}
+
+void AsioOutput::ReadLatencies()
+{
+    if (driver == nullptr)
+    {
+        return;
+    }
+    long inputLatency = 0;
+    long outputLatency = 0;
+    driver->GetLatencies(&inputLatency, &outputLatency);
+    outputLatencyFrames = outputLatency > 0 ? static_cast<uint32_t>(outputLatency) : bufferFrames;
+}
+
 Result<void> AsioOutput::Reset()
 {
     if (driver == nullptr)
@@ -573,6 +594,11 @@ bool AsioOutput::ShowControlPanel()
 void AsioOutput::RequestReset()
 {
     isResetRequested.store(true);
+}
+
+void AsioOutput::RequestLatencyRead()
+{
+    isLatencyChanged.store(true);
 }
 
 void AsioOutput::OnBufferSwitch(int32_t bufferIndex)

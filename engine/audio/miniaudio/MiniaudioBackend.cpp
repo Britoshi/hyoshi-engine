@@ -250,6 +250,14 @@ void MiniaudioBackend::Update()
             HYOSHI_LOG_ERROR("Audio: ASIO couldn't reset: {}", result.GetError().Message);
         }
     }
+    // Only its latencies: the music plays on, the song clock told of the new one.
+    if (asio && asio->ConsumeLatencyChange())
+    {
+        asio->ReadLatencies();
+        isRouteChanged.store(true);
+        HYOSHI_LOG_INFO("Audio: ASIO latencies changed, ~{:.1f} ms output latency",
+                        static_cast<double>(GetEstimatedOutputLatencyUs()) / 1000.0);
+    }
 #endif
 
     const int64_t applied = mixer->GetSnapshot().CommandsApplied;

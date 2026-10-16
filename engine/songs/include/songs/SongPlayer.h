@@ -142,6 +142,9 @@ private:
     bool shouldPlayWhenLoaded = true;
     bool isLoaded = false;
     bool wasJustLoaded = false;
+    // Loaded (or loading) music not yet played, for the log: its first callback that plays it, after
+    // any seek, is when it's heard (but for the output's latency).
+    bool isAwaitingFirstPlay = false;
 
     hyoshi::audio::AudioClockSnapshot snapshot;
     hyoshi::HostTimeNs lastUpdateTime = 0;

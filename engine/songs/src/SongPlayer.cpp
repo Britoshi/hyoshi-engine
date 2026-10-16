@@ -30,6 +30,7 @@ void SongPlayer::Load(std::string songName, Loader loader, bool playWhenLoaded)
     shouldPlayWhenLoaded = playWhenLoaded;
     isLoaded = false;
     loadStart = std::chrono::steady_clock::now();
+    isAwaitingFirstPlay = true;
     pendingStream = {};
     const uint32_t rate = audio.GetSampleRate();
     pendingMusic = jobs.Submit([loader = std::move(loader), rate] { return loader(rate); });
@@ -42,6 +43,7 @@ void SongPlayer::LoadFile(const std::string& path, bool playWhenLoaded, SongTime
     shouldPlayWhenLoaded = playWhenLoaded;
     isLoaded = false;
     loadStart = std::chrono::steady_clock::now();
+    isAwaitingFirstPlay = true;
     pendingMusic = {};
     const uint32_t rate = audio.GetSampleRate();
     const hyoshi::audio::MusicStreamOptions options{.LeadInFrames = hyoshi::UsToFrames(leadInUs, rate)};
@@ -102,6 +104,16 @@ void SongPlayer::Update(hyoshi::HostTimeNs now)
     snapshot = audio.GetClockSnapshot();
     clock.Update(snapshot, now);
     lastUpdateTime = now;
+    // What "Loaded" leaves out: a seek to where it's to start, its first blocks decoded, and the
+    // output's callbacks till one plays it.
+    if (isAwaitingFirstPlay && isLoaded && snapshot.SeekGeneration >= expectedGeneration &&
+        snapshot.IsMusicPlaying != 0)
+    {
+        isAwaitingFirstPlay = false;
+        const std::chrono::duration<double, std::milli> waited = std::chrono::steady_clock::now() - loadStart;
+        HYOSHI_LOG_INFO("Playing {} {:.0f} ms after it was asked for (heard ~{:.0f} ms after that)", name,
+                        waited.count(), static_cast<double>(audio.GetEstimatedOutputLatencyUs()) / 1000.0);
+    }
 
     const SongTimeUs songTime = clock.GetSongTime();
     // Until the audio thread applies a seek, the snapshot still describes the old position.
