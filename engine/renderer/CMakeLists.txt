@@ -6,6 +6,7 @@ add_library(hyoshi_renderer STATIC
     src/Model.cpp
     src/Renderer3D.cpp
     src/Skinning.cpp
+    src/SpringBones.cpp
     src/SpriteBatch.cpp
     src/TextRenderer.cpp
     src/ThirdPartyImplementations.cpp

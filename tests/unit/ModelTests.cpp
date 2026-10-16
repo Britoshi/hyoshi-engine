@@ -1,5 +1,6 @@
 #include "renderer/Model.h"
 #include "renderer/Skinning.h"
+#include "renderer/SpringBones.h"
 
 #include <doctest/doctest.h>
 
@@ -255,4 +256,37 @@ TEST_CASE("ReadModel reads a skin and its animation, which PoseNodes and SkinVer
     hyoshi::renderer::ApplyPose(model, turn, 0.5f);
     CHECK(model.Parts[0].Skin.empty());
     CHECK(model.Parts[0].Mesh.Vertices[1].Position.x == doctest::Approx(1.41421f));
+}
+
+TEST_CASE("SpringBones swing a chain down under its pull, keeping its length, and hold it without one")
+{
+    // A bone along x from the origin, its tip a meter out, and a root above both.
+    hyoshi::renderer::ModelData model;
+    model.Nodes = {{"Root", -1}, {"Tail", 0}, {"Tip", 1}};
+    model.Nodes[2].Translation = {1.0f, 0.0f, 0.0f};
+    const auto settle = [&model](hyoshi::renderer::SpringSettings settings)
+    {
+        hyoshi::renderer::SpringBones springs;
+        CHECK(springs.Add(model, "Tail", settings) == 1);
+        CHECK(springs.GetCount() == 1);
+        std::vector<glm::mat4> nodes;
+        for (int frame = 0; frame < 240; ++frame)
+        {
+            hyoshi::renderer::PoseNodes(model, nullptr, 0.0f, nodes);
+            springs.Step(model, nodes, 1.0f / 60.0f);
+        }
+        return glm::vec3(nodes[2][3]);
+    };
+    const glm::vec3 hanging = settle({0.0f, 0.4f, 10.0f});
+    CHECK(glm::length(hanging) == doctest::Approx(1.0f));
+    CHECK(hanging.y < -0.99f);
+    // Pulled back as hard as down, it settles half way.
+    const glm::vec3 between = settle({10.0f, 0.4f, 10.0f});
+    CHECK(between.x == doctest::Approx(0.7071f).epsilon(0.02));
+    CHECK(between.y == doctest::Approx(-0.7071f).epsilon(0.02));
+    const glm::vec3 held = settle({1.0f, 0.4f, 0.0f});
+    CHECK(held.x == doctest::Approx(1.0f));
+    CHECK(held.y == doctest::Approx(0.0f));
+    hyoshi::renderer::SpringBones none;
+    CHECK(none.Add(model, "Skirt", {}) == 0);
 }
