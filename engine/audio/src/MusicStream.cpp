@@ -39,7 +39,7 @@ MusicStream::MusicStream(std::unique_ptr<IStreamDecoder> streamDecoder, uint32_t
     : decoder(std::move(streamDecoder)), sampleRate(rate), leadInFrames(std::max<DspFrame>(options.LeadInFrames, 0)),
       frameCount(leadInFrames + decoder->GetFrameCount()),
       samples(size_t{BLOCK_COUNT} * BLOCK_FRAMES * PcmBuffer::CHANNELS), decodedBlocks(BLOCK_COUNT),
-      freeBlocks(BLOCK_COUNT)
+      freeBlocks(BLOCK_COUNT), isWaitingForSeek(options.IsWaitingForSeek)
 {
     for (uint32_t block = 0; block < BLOCK_COUNT; ++block)
     {
@@ -82,7 +82,7 @@ uint32_t MusicStream::DecodeBlocks()
     while (!isStopping.load(std::memory_order_relaxed))
     {
         ApplySeekRequest();
-        if (decodeFrame >= frameCount)
+        if (isWaitingForSeek || decodeFrame >= frameCount)
         {
             break;
         }
@@ -123,6 +123,7 @@ void MusicStream::ApplySeekRequest()
         hasSeekRequest.store(false, std::memory_order_relaxed);
     }
     hasDecodedForEpoch = false;
+    isWaitingForSeek = false;
     framesToSkip = 0;
     if (decodeFrame >= frameCount)
     {
@@ -193,9 +194,9 @@ void MusicStream::RunDecoderThread()
         lock.lock();
         const auto isWoken = [this]
         { return isStopping.load(std::memory_order_relaxed) || hasSeekRequest.load(std::memory_order_relaxed); };
-        if (decodeFrame >= frameCount)
+        if (isWaitingForSeek || decodeFrame >= frameCount)
         {
-            // At the end: nothing to do until a seek.
+            // At the end, or not started: nothing to do until a seek.
             wakeDecoder.wait(lock, isWoken);
         }
         else

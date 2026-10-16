@@ -11,6 +11,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace hyoshi::songs
@@ -30,8 +31,10 @@ public:
     void Load(std::string name, Loader loader, bool playWhenLoaded = true);
     // Streams an audio file: it's ready as soon as the file is read and its headers parsed, and
     // it's decoded while it plays (MusicStream). leadInUs of silence come before it, as part of
-    // the music.
-    void LoadFile(const std::string& path, bool playWhenLoaded = true, hyoshi::SongTimeUs leadInUs = 0);
+    // the music. startUs: where it starts once loaded (none: its beginning), nothing decoded before
+    // it, so a preview from a song's middle is heard as soon as one from its start.
+    void LoadFile(const std::string& path, bool playWhenLoaded = true, hyoshi::SongTimeUs leadInUs = 0,
+                  std::optional<hyoshi::SongTimeUs> startUs = std::nullopt);
 
     // Once per frame: finishes loading, follows route changes, updates the clock.
     void Update(hyoshi::HostTimeNs now);
@@ -140,6 +143,8 @@ private:
     // When the load began, for the log.
     std::chrono::steady_clock::time_point loadStart;
     bool shouldPlayWhenLoaded = true;
+    // Where the music loading starts (LoadFile's startUs).
+    std::optional<hyoshi::SongTimeUs> pendingStartUs;
     bool isLoaded = false;
     bool wasJustLoaded = false;
     // Loaded (or loading) music not yet played, for the log: its first callback that plays it, after

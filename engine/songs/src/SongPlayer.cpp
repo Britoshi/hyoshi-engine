@@ -31,12 +31,14 @@ void SongPlayer::Load(std::string songName, Loader loader, bool playWhenLoaded)
     isLoaded = false;
     loadStart = std::chrono::steady_clock::now();
     isAwaitingFirstPlay = true;
+    pendingStartUs.reset();
     pendingStream = {};
     const uint32_t rate = audio.GetSampleRate();
     pendingMusic = jobs.Submit([loader = std::move(loader), rate] { return loader(rate); });
 }
 
-void SongPlayer::LoadFile(const std::string& path, bool playWhenLoaded, SongTimeUs leadInUs)
+void SongPlayer::LoadFile(const std::string& path, bool playWhenLoaded, SongTimeUs leadInUs,
+                          std::optional<SongTimeUs> startUs)
 {
     name = path;
     loadError.clear();
@@ -46,7 +48,9 @@ void SongPlayer::LoadFile(const std::string& path, bool playWhenLoaded, SongTime
     isAwaitingFirstPlay = true;
     pendingMusic = {};
     const uint32_t rate = audio.GetSampleRate();
-    const hyoshi::audio::MusicStreamOptions options{.LeadInFrames = hyoshi::UsToFrames(leadInUs, rate)};
+    pendingStartUs = startUs;
+    const hyoshi::audio::MusicStreamOptions options{.LeadInFrames = hyoshi::UsToFrames(leadInUs, rate),
+                                                    .IsWaitingForSeek = startUs.has_value()};
     pendingStream = jobs.Submit(
         [path, rate, options]() -> hyoshi::Result<std::unique_ptr<hyoshi::audio::MusicStream>>
         {
@@ -155,6 +159,12 @@ void SongPlayer::OnLoaded(hyoshi::Result<int64_t> generation, DspFrame frameCoun
     if (musicRate != 1.0)
     {
         audio.SetMusicRate(musicRate);
+    }
+    // Music loaded to start elsewhere decodes nothing till it's told where.
+    if (pendingStartUs)
+    {
+        SeekTo(*pendingStartUs);
+        pendingStartUs.reset();
     }
     if (shouldPlayWhenLoaded)
     {

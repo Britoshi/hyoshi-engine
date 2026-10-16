@@ -27,6 +27,10 @@ struct MusicStreamOptions
     DspFrame LeadInFrames = 0;
     // Decode on the stream's own thread. Tests turn this off and call DecodeBlocks themselves.
     bool IsThreaded = true;
+    // Decode nothing until the first seek (RequestSeek), for music started elsewhere than its
+    // beginning (a preview): its first blocks are then where it starts, every block free for them,
+    // instead of waiting for the audio thread to drop blocks from the beginning first.
+    bool IsWaitingForSeek = false;
 };
 
 // Music decoded a little ahead of playback instead of all at once, so it starts in milliseconds and
@@ -131,6 +135,8 @@ private:
     DspFrame decoderPosition = 0;
     DspFrame framesToSkip = 0;
     bool hasDecodedForEpoch = false;
+    // Nothing is decoded until a seek (MusicStreamOptions::IsWaitingForSeek).
+    bool isWaitingForSeek = false;
     // After a failed seek or read, until the next seek: blocks are silence.
     bool isSilent = false;
 

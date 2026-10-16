@@ -213,6 +213,19 @@ TEST_CASE("MusicStream keeps blocks decoded after a seek until the seek is appli
     CHECK(IsRampFrom(Play(stream), 10'000));
 }
 
+TEST_CASE("MusicStream waiting for a seek decodes nothing till then, then only from there")
+{
+    MusicStream stream = MakeStream(100 * BLOCK, {.IsThreaded = false, .IsWaitingForSeek = true});
+    CHECK(stream.DecodeBlocks() == 0);
+    CHECK(stream.Collect() == 0);
+
+    stream.RequestSeek(50'000, 1);
+    stream.SetReadEpoch(1);
+    CHECK(stream.DecodeBlocks() == MusicStream::BLOCK_COUNT);
+    CHECK(stream.Collect() == MusicStream::BLOCK_COUNT * BLOCK);
+    CHECK(IsRampFrom(Play(stream, 3 * BLOCK), 50'000));
+}
+
 TEST_CASE("MusicStream seeks into the lead-in and past the end")
 {
     MusicStream stream = MakeStream(6'000, {.LeadInFrames = 4'000, .IsThreaded = false});
