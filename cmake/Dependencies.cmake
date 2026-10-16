@@ -82,6 +82,16 @@ CPMAddPackage(
 add_library(hyoshi_stb INTERFACE)
 target_include_directories(hyoshi_stb SYSTEM INTERFACE ${stb_SOURCE_DIR})
 
+# glTF models for 3D (decision 0003): a single header.
+CPMAddPackage(
+    NAME cgltf
+    GITHUB_REPOSITORY jkuhlmann/cgltf
+    GIT_TAG v1.15
+    DOWNLOAD_ONLY YES
+)
+add_library(hyoshi_cgltf INTERFACE)
+target_include_directories(hyoshi_cgltf SYSTEM INTERFACE ${cgltf_SOURCE_DIR})
+
 CPMAddPackage(
     NAME glm
     SYSTEM YES

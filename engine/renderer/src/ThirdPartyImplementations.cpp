@@ -1,5 +1,5 @@
-// stb_truetype's implementation, for TextRenderer, and stb_image's and stb_image_resize2's, for Image
-// (PNG, JPEG, and GIF's first frame).
+// stb_truetype's implementation, for TextRenderer, stb_image's and stb_image_resize2's, for Image
+// (PNG, JPEG, and GIF's first frame), and cgltf's, for Model.
 // NOLINTBEGIN
 // Optimized in debug builds too: unoptimized, decoding a storyboard's pictures takes seconds, and
 // nobody steps through these. Here for MSVC, which needs its runtime checks off for it; other
@@ -19,4 +19,7 @@
 
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include <stb_image_resize2.h>
+
+#define CGLTF_IMPLEMENTATION
+#include <cgltf.h>
 // NOLINTEND
