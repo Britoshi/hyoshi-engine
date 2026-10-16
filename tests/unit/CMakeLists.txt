@@ -2,6 +2,7 @@ add_executable(hyoshi_unit_tests
     TestMain.cpp
     AudioDecoderTests.cpp
     Camera2DTests.cpp
+    Camera3DTests.cpp
     ChartTests.cpp
     CircleHitSoundsTests.cpp
     CircleTests.cpp

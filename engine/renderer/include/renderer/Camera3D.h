@@ -3,7 +3,10 @@
 #include "rhi/RhiTypes.h"
 
 #include <glm/mat4x4.hpp>
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
+
+#include <optional>
 
 namespace hyoshi::renderer
 {
@@ -25,6 +28,14 @@ struct Camera3D
     // World space to clip space as the swapchain takes it: Vulkan's (y down, depth 0 to 1), at the
     // aspect of the swapchain as it's seen, and turned by its pre-rotation, as Camera2D's is.
     glm::mat4 GetClipFromWorld(rhi::Extent swapchainExtent, rhi::SurfaceTransform transform) const;
+
+    // A canvas is the screen as it's seen (Camera2D's: `canvas` across and down, from the top left,
+    // y down), whatever the swapchain's pre-rotation. Where `point` lands on one, or none if it's
+    // behind the camera.
+    std::optional<glm::vec2> ProjectToCanvas(glm::vec3 point, glm::vec2 canvas) const;
+    // The direction (unit length) from Position through a point on a canvas: for picking what's
+    // under the pointer.
+    glm::vec3 GetRayThrough(glm::vec2 canvasPoint, glm::vec2 canvas) const;
 };
 
 } // namespace hyoshi::renderer
