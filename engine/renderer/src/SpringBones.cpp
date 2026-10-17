@@ -93,6 +93,21 @@ size_t SpringBones::Add(const ModelData& model, std::string_view node, SpringSet
     return added;
 }
 
+bool SpringBones::AddCollider(const ModelData& model, std::string_view from, std::string_view to, float radius)
+{
+    const auto find = [&model](std::string_view name)
+    { return std::ranges::find(model.Nodes, name, &ModelNode::Name); };
+    const auto start = find(from);
+    const auto end = to.empty() ? start : find(to);
+    if (start == model.Nodes.end() || end == model.Nodes.end())
+    {
+        return false;
+    }
+    colliders.push_back(
+        {static_cast<uint32_t>(start - model.Nodes.begin()), static_cast<uint32_t>(end - model.Nodes.begin()), radius});
+    return true;
+}
+
 void SpringBones::Reset()
 {
     isStarted = false;
@@ -151,7 +166,7 @@ void SpringBones::Swing(std::vector<glm::mat4>& nodes, bool isStepping)
                                    (aim * (settings.Stiffness * STEP_SECONDS)) +
                                    (DOWN * (settings.Gravity * STEP_SECONDS));
             joint.Before = joint.Tip;
-            joint.Tip = next;
+            joint.Tip = KeepOut(nodes, next, settings.Radius);
         }
         const glm::vec3 toTip = joint.Tip - head;
         const float reach = glm::length(toTip);
@@ -165,6 +180,32 @@ void SpringBones::Swing(std::vector<glm::mat4>& nodes, bool isStepping)
             nodes[below] = swing * nodes[below];
         }
     }
+}
+
+glm::vec3 SpringBones::KeepOut(const std::vector<glm::mat4>& nodes, glm::vec3 tip, float radius) const
+{
+    for (const Collider& collider : colliders)
+    {
+        // The nearest point on the bone, and out from it as far as the two are thick.
+        const glm::vec3 from(nodes[collider.From][3]);
+        const glm::vec3 along = glm::vec3(nodes[collider.To][3]) - from;
+        const float lengthSquared = glm::dot(along, along);
+        const float share =
+            lengthSquared > 1.0e-12f ? std::clamp(glm::dot(tip - from, along) / lengthSquared, 0.0f, 1.0f) : 0.0f;
+        const glm::vec3 nearest = from + (along * share);
+        const glm::vec3 away = tip - nearest;
+        const float distance = glm::length(away);
+        const float reach = collider.Radius + radius;
+        if (distance < reach && distance > 1.0e-6f)
+        {
+            tip = nearest + (away * (reach / distance));
+        }
+    }
+    if (floor)
+    {
+        tip.y = std::max(tip.y, *floor + radius);
+    }
+    return tip;
 }
 
 } // namespace hyoshi::renderer

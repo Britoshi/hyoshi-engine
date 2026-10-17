@@ -290,3 +290,39 @@ TEST_CASE("SpringBones swing a chain down under its pull, keeping its length, an
     hyoshi::renderer::SpringBones none;
     CHECK(none.Add(model, "Skirt", {}) == 0);
 }
+
+TEST_CASE("SpringBones keep a chain out of a collider and above the floor")
+{
+    // A bone along x from the origin, a meter long, pulled down; a ball under its tip, and a floor.
+    hyoshi::renderer::ModelData model;
+    model.Nodes = {{"Root", -1}, {"Tail", 0}, {"Tip", 1}, {"Ball", 0}};
+    model.Nodes[2].Translation = {1.0f, 0.0f, 0.0f};
+    model.Nodes[3].Translation = {1.0f, -1.0f, 0.0f};
+    const auto settle = [&model](bool isBall, std::optional<float> floor)
+    {
+        hyoshi::renderer::SpringBones springs;
+        springs.Add(model, "Tail", {0.0f, 0.4f, 10.0f, 0.1f});
+        if (isBall)
+        {
+            CHECK(springs.AddCollider(model, "Ball", "", 0.6f));
+        }
+        springs.SetFloor(floor);
+        std::vector<glm::mat4> nodes;
+        for (int frame = 0; frame < 240; ++frame)
+        {
+            hyoshi::renderer::PoseNodes(model, nullptr, 0.0f, nodes);
+            springs.Step(model, nodes, 1.0f / 60.0f);
+        }
+        return glm::vec3(nodes[2][3]);
+    };
+    // Hanging straight down, its tip would be in the ball: it rests on it, as far out as the two are
+    // thick (or nearly, kept at its length).
+    const glm::vec3 onBall = settle(true, std::nullopt);
+    CHECK(glm::length(onBall) == doctest::Approx(1.0f));
+    CHECK(glm::distance(onBall, glm::vec3(1.0f, -1.0f, 0.0f)) > 0.6f);
+    // A floor half a meter down: its tip as far above it as it's thick.
+    const glm::vec3 onFloor = settle(false, -0.5f);
+    CHECK(onFloor.y == doctest::Approx(-0.4f).epsilon(0.02));
+    hyoshi::renderer::SpringBones springs;
+    CHECK_FALSE(springs.AddCollider(model, "Leg", "", 0.1f));
+}
