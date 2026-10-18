@@ -3,6 +3,7 @@
 #include "renderer/Model.h"
 
 #include <glm/mat4x4.hpp>
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
 #include <cstddef>
@@ -26,12 +27,21 @@ struct SpringSettings
     float Radius = 0.0f;
 };
 
+// A seat's top, level, in the model's space (a chair's, a bed's): across and along (x and z) from
+// `From` to `To`, `Height` up, a block down to the floor under it.
+struct SpringSeat
+{
+    glm::vec2 From{0.0f};
+    glm::vec2 To{0.0f};
+    float Height = 0.0f;
+};
+
 // Bones that swing as a model moves (hair, a coat's tails, a skirt: Unity's dynamic bones), simple
 // and cheap, on the CPU: each bone's tip (its child's place) carried on by its own speed, pulled
 // back toward where the animation points it and down, kept out of the colliders (capsules around the
-// body's bones) and above the floor, if it has them, and at the bone's length; the bone turned to
-// point at it, and the bones below it with it. In steps of a fixed length (60 a second), so the same
-// motion swings the same way every time, as a clip baked from it would.
+// body's bones), on a seat, and above the floor, if it has them, and at the bone's length; the bone
+// turned to point at it, and the bones below it with it. In steps of a fixed length (60 a second), so
+// the same motion swings the same way every time, as a clip baked from it would.
 class SpringBones
 {
 public:
@@ -47,6 +57,14 @@ public:
     void SetFloor(std::optional<float> height)
     {
         floor = height;
+    }
+
+    // A seat the swinging bones lie on and hang over the edges of (none: no seat): a tip over it whose
+    // bone comes down from its top or above is kept on its top; one beside it, under its top, out of
+    // its sides.
+    void SetSeat(std::optional<SpringSeat> top)
+    {
+        seat = top;
     }
 
     // The next Step starts again from the animation as it stands (after a jump, such as a new clip).
@@ -91,6 +109,7 @@ private:
     std::vector<Joint> joints;
     std::vector<Collider> colliders;
     std::optional<float> floor;
+    std::optional<SpringSeat> seat;
     std::vector<glm::mat4> animated;
     float pending = 0.0f;
     bool isStarted = false;

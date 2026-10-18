@@ -326,3 +326,53 @@ TEST_CASE("SpringBones keep a chain out of a collider and above the floor")
     hyoshi::renderer::SpringBones springs;
     CHECK_FALSE(springs.AddCollider(model, "Leg", "", 0.1f));
 }
+
+TEST_CASE("SpringBones lay a chain on a seat and over its edge, and keep a bone beside it out of its side")
+{
+    // A seat's top 0.2 m under the root, its edge half a meter out along x.
+    const hyoshi::renderer::SpringSeat seat{{-1.0f, -1.0f}, {0.5f, 1.0f}, -0.2f};
+    const auto settle =
+        [&seat](const hyoshi::renderer::ModelData& model, hyoshi::renderer::SpringSettings settings, bool hasSeat)
+    {
+        hyoshi::renderer::SpringBones springs;
+        springs.Add(model, "Tail", settings);
+        if (hasSeat)
+        {
+            springs.SetSeat(seat);
+        }
+        std::vector<glm::mat4> nodes;
+        for (int frame = 0; frame < 240; ++frame)
+        {
+            hyoshi::renderer::PoseNodes(model, nullptr, 0.0f, nodes);
+            springs.Step(model, nodes, 1.0f / 60.0f);
+        }
+        return nodes;
+    };
+    // Three bones of 0.3 m along x from the root, pulled down: they come down onto the top, along it,
+    // and over its edge, each at its length, none under the top over the seat.
+    hyoshi::renderer::ModelData chain;
+    chain.Nodes = {{"Root", -1}, {"Tail", 0}, {"Middle", 1}, {"End", 2}, {"Tip", 3}};
+    for (size_t node = 2; node < chain.Nodes.size(); ++node)
+    {
+        chain.Nodes[node].Translation = {0.3f, 0.0f, 0.0f};
+    }
+    const std::vector<glm::mat4> laid = settle(chain, {0.0f, 0.4f, 10.0f, 0.05f}, true);
+    for (size_t node = 2; node < chain.Nodes.size(); ++node)
+    {
+        const glm::vec3 at(laid[node][3]);
+        CHECK(glm::distance(at, glm::vec3(laid[node - 1][3])) == doctest::Approx(0.3f));
+        CHECK((at.x > 0.5f || at.y >= -0.2f));
+    }
+    const glm::vec3 end(laid[4][3]);
+    CHECK(end.x > 0.5f);
+    CHECK(end.y < -0.35f);
+    // Without the seat, it hangs straight down.
+    CHECK(glm::vec3(settle(chain, {0.0f, 0.4f, 10.0f, 0.05f}, false)[4][3]).y < -0.89f);
+    // A bone beside the seat, under its top, pointing down into it: kept out of its side.
+    hyoshi::renderer::ModelData beside;
+    beside.Nodes = {{"Root", -1}, {"Tail", 0}, {"Tip", 1}};
+    beside.Nodes[1].Translation = {0.6f, -0.3f, 0.0f};
+    beside.Nodes[2].Translation = {-0.2121f, -0.2121f, 0.0f};
+    CHECK(glm::vec3(settle(beside, {10.0f, 0.4f, 0.0f, 0.05f}, false)[2][3]).x < 0.45f);
+    CHECK(glm::vec3(settle(beside, {10.0f, 0.4f, 0.0f, 0.05f}, true)[2][3]).x > 0.5f);
+}

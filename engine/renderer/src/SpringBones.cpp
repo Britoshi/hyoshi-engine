@@ -6,7 +6,9 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <optional>
 
 namespace hyoshi::renderer
 {
@@ -17,6 +19,65 @@ constexpr float STEP_SECONDS = 1.0f / 60.0f;
 // Steps a Step may take, so a long frame (or a pause) doesn't run the swinging on and on.
 constexpr int32_t MAX_STEPS = 4;
 constexpr glm::vec3 DOWN{0.0f, -1.0f, 0.0f};
+
+// Where `tip` (as thick as `radius`, its bone from `head`, `length` long) goes out of the seat, if
+// it's in it (over it, as far as it's thick, and under its top), by the way its bone came in: through
+// the top (from over the seat, at or above its top, or crossing its edge there), onto the top at its
+// length, the same way round (straight down: toward the nearest side), so the next bone's head is no
+// lower than the top; through a side (crossing its edge under the top), out of that side.
+std::optional<glm::vec3> GetOutOfSeat(const SpringSeat& seat, glm::vec3 head, glm::vec3 tip, float length, float radius)
+{
+    const glm::vec2 from = seat.From - glm::vec2(radius);
+    const glm::vec2 to = seat.To + glm::vec2(radius);
+    const float top = seat.Height + radius;
+    if (tip.x <= from.x || tip.x >= to.x || tip.z <= from.y || tip.z >= to.y || tip.y >= top)
+    {
+        return std::nullopt;
+    }
+    // Where along the bone it crosses the seat's edge (from beside it: x's low and high sides, then
+    // z's), and which side.
+    float crossing = 0.0f;
+    std::optional<size_t> crossed;
+    const auto cross = [&crossing, &crossed](float bone, float end, float low, float high, size_t lowSide)
+    {
+        const bool isLow = bone < low;
+        if (isLow || bone > high)
+        {
+            const float at = ((isLow ? low : high) - bone) / (end - bone);
+            if (at > crossing)
+            {
+                crossing = at;
+                crossed = isLow ? lowSide : lowSide + 1;
+            }
+        }
+    };
+    cross(head.x, tip.x, from.x, to.x, 0);
+    cross(head.z, tip.z, from.y, to.y, 2);
+    const std::array<float, 4> out{tip.x - from.x, to.x - tip.x, tip.z - from.y, to.y - tip.z};
+    const auto nearest = static_cast<size_t>(std::ranges::min_element(out) - out.begin());
+    const bool isFromTop = crossed ? head.y + (crossing * (tip.y - head.y)) >= top : head.y >= seat.Height;
+    if (isFromTop)
+    {
+        constexpr std::array<glm::vec2, 4> TO_SIDE{{{-1.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, -1.0f}, {0.0f, 1.0f}}};
+        const float drop = std::clamp(head.y - top, 0.0f, length);
+        const glm::vec2 flat(tip.x - head.x, tip.z - head.z);
+        const float across = glm::length(flat);
+        const glm::vec2 way = across > 1.0e-6f ? flat / across : TO_SIDE[nearest];
+        const glm::vec2 lying = way * std::sqrt((length * length) - (drop * drop));
+        return glm::vec3(head.x + lying.x, head.y - drop, head.z + lying.y);
+    }
+    switch (crossed.value_or(nearest))
+    {
+    case 0:
+        return glm::vec3(from.x, tip.y, tip.z);
+    case 1:
+        return glm::vec3(to.x, tip.y, tip.z);
+    case 2:
+        return glm::vec3(tip.x, tip.y, from.y);
+    default:
+        return glm::vec3(tip.x, tip.y, to.y);
+    }
+}
 
 // The turn from one direction to another (both of length 1), the shortest way.
 glm::quat TurnBetween(glm::vec3 from, glm::vec3 to)
@@ -170,8 +231,17 @@ void SpringBones::Swing(std::vector<glm::mat4>& nodes, bool isStepping)
         }
         const glm::vec3 toTip = joint.Tip - head;
         const float reach = glm::length(toTip);
-        const glm::vec3 pointing = reach > 1.0e-6f ? toTip / reach : aim;
+        glm::vec3 pointing = reach > 1.0e-6f ? toTip / reach : aim;
         joint.Tip = head + (pointing * length);
+        // On the seat, or out of its side.
+        if (const std::optional<glm::vec3> out =
+                seat ? GetOutOfSeat(*seat, head, joint.Tip, length, settings.Radius) : std::nullopt)
+        {
+            joint.Tip = *out;
+            const glm::vec3 toOut = joint.Tip - head;
+            const float outReach = glm::length(toOut);
+            pointing = outReach > 1.0e-6f ? toOut / outReach : aim;
+        }
         const glm::mat4 swing = glm::translate(glm::mat4(1.0f), head) * glm::mat4_cast(TurnBetween(aim, pointing)) *
                                 glm::translate(glm::mat4(1.0f), -head);
         nodes[joint.Node] = swing * nodes[joint.Node];
