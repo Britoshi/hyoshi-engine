@@ -19,6 +19,7 @@ namespace
 // Sized for a frame of sprites and debug UI; another pool is added if a frame needs more.
 constexpr uint32_t DESCRIPTOR_POOL_SETS = 512;
 constexpr uint32_t DESCRIPTOR_POOL_SAMPLERS = 1024;
+constexpr uint32_t DESCRIPTOR_POOL_STORAGE_BUFFERS = 256;
 
 VkFormat ToVkFormat(TextureFormat format)
 {
@@ -92,8 +93,18 @@ Result<BufferHandle> VulkanRenderDevice::CreateBuffer(const BufferDesc& desc)
 
     VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bufferInfo.size = desc.Size;
-    bufferInfo.usage =
-        desc.Usage == BufferUsage::Index ? VK_BUFFER_USAGE_INDEX_BUFFER_BIT : VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    switch (desc.Usage)
+    {
+    case BufferUsage::Index:
+        bufferInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+        break;
+    case BufferUsage::Storage:
+        bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        break;
+    case BufferUsage::Vertex:
+        bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        break;
+    }
     if (desc.Memory == MemoryUsage::GpuOnly)
     {
         bufferInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -288,8 +299,18 @@ Result<void> VulkanRenderDevice::UploadBuffer(BufferHandle buffer, const void* d
 
     const VkBuffer source = staging.Value().Buffer;
     const VkBuffer destination = bufferData->Buffer;
-    const VkAccessFlags readAccess =
-        bufferData->Usage == BufferUsage::Index ? VK_ACCESS_INDEX_READ_BIT : VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+    const bool isStorage = bufferData->Usage == BufferUsage::Storage;
+    VkAccessFlags readAccess = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+    if (bufferData->Usage == BufferUsage::Index)
+    {
+        readAccess = VK_ACCESS_INDEX_READ_BIT;
+    }
+    else if (isStorage)
+    {
+        readAccess = VK_ACCESS_SHADER_READ_BIT;
+    }
+    const VkPipelineStageFlags readStage =
+        isStorage ? VK_PIPELINE_STAGE_VERTEX_SHADER_BIT : VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
     Result<void> result = SubmitImmediate(
         [&](VkCommandBuffer commandBuffer)
         {
@@ -304,8 +325,8 @@ Result<void> VulkanRenderDevice::UploadBuffer(BufferHandle buffer, const void* d
             barrier.buffer = destination;
             barrier.offset = offset;
             barrier.size = size;
-            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0,
-                                 0, nullptr, 1, &barrier, 0, nullptr);
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, readStage, 0, 0, nullptr, 1, &barrier,
+                                 0, nullptr);
         });
 
     vmaDestroyBuffer(allocator, staging.Value().Buffer, staging.Value().Allocation);
@@ -393,26 +414,33 @@ Result<void> VulkanRenderDevice::SubmitImmediate(const std::function<void(VkComm
     return CheckVk(vkWaitForFences(device, 1, &immediateFence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
 }
 
-Result<VkDescriptorSetLayout> VulkanRenderDevice::GetSetLayout(uint32_t textureCount)
+Result<VkDescriptorSetLayout> VulkanRenderDevice::GetSetLayout(uint32_t textureCount, uint32_t storageBufferCount)
 {
     HYOSHI_ASSERT(textureCount <= VulkanCommandList::MAX_TEXTURE_SLOTS);
+    HYOSHI_ASSERT(storageBufferCount <= VulkanCommandList::MAX_STORAGE_BUFFER_SLOTS);
 
-    if (auto found = setLayoutsByTextureCount.find(textureCount); found != setLayoutsByTextureCount.end())
+    const uint32_t key = textureCount + (storageBufferCount << 8U);
+    if (auto found = setLayouts.find(key); found != setLayouts.end())
     {
         return found->second;
     }
 
-    std::array<VkDescriptorSetLayoutBinding, VulkanCommandList::MAX_TEXTURE_SLOTS> bindings{};
-    for (uint32_t slot = 0; slot < textureCount; ++slot)
+    std::array<VkDescriptorSetLayoutBinding,
+               VulkanCommandList::MAX_TEXTURE_SLOTS + VulkanCommandList::MAX_STORAGE_BUFFER_SLOTS>
+        bindings{};
+    const uint32_t count = textureCount + storageBufferCount;
+    for (uint32_t binding = 0; binding < count; ++binding)
     {
-        bindings[slot].binding = slot;
-        bindings[slot].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[slot].descriptorCount = 1;
-        bindings[slot].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        const bool isTexture = binding < textureCount;
+        bindings[binding].binding = binding;
+        bindings[binding].descriptorType =
+            isTexture ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[binding].descriptorCount = 1;
+        bindings[binding].stageFlags = isTexture ? VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_VERTEX_BIT;
     }
 
     VkDescriptorSetLayoutCreateInfo createInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    createInfo.bindingCount = textureCount;
+    createInfo.bindingCount = count;
     createInfo.pBindings = bindings.data();
 
     VkDescriptorSetLayout layout = VK_NULL_HANDLE;
@@ -423,7 +451,7 @@ Result<VkDescriptorSetLayout> VulkanRenderDevice::GetSetLayout(uint32_t textureC
         return result.GetError();
     }
 
-    setLayoutsByTextureCount.emplace(textureCount, layout);
+    setLayouts.emplace(key, layout);
     return layout;
 }
 
@@ -435,11 +463,14 @@ VkDescriptorSet VulkanRenderDevice::AllocateDescriptorSet(VkDescriptorSetLayout 
     {
         if (frame.ActiveDescriptorPool == frame.DescriptorPools.size())
         {
-            const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, DESCRIPTOR_POOL_SAMPLERS};
+            const std::array<VkDescriptorPoolSize, 2> poolSizes{{
+                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, DESCRIPTOR_POOL_SAMPLERS},
+                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, DESCRIPTOR_POOL_STORAGE_BUFFERS},
+            }};
             VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
             poolInfo.maxSets = DESCRIPTOR_POOL_SETS;
-            poolInfo.poolSizeCount = 1;
-            poolInfo.pPoolSizes = &poolSize;
+            poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+            poolInfo.pPoolSizes = poolSizes.data();
 
             VkDescriptorPool pool = VK_NULL_HANDLE;
             if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &pool) != VK_SUCCESS)
@@ -525,11 +556,11 @@ void VulkanRenderDevice::DestroyAllResources()
     samplers.ForEach([this](SamplerData& data) { vkDestroySampler(device, data.Sampler, nullptr); });
     samplers.Clear();
 
-    for (auto& [textureCount, layout] : setLayoutsByTextureCount)
+    for (auto& [key, layout] : setLayouts)
     {
         vkDestroyDescriptorSetLayout(device, layout, nullptr);
     }
-    setLayoutsByTextureCount.clear();
+    setLayouts.clear();
 }
 
 } // namespace hyoshi::rhi

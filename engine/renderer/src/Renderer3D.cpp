@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <string>
 
 namespace hyoshi::renderer
 {
@@ -42,6 +43,20 @@ static_assert(sizeof(MeshConstants) == 128, "Mesh push constants must fit in 128
 
 // The fog's alpha that gives a density of 1 per unit (Mesh.slang's FOG_DENSITY_SCALE).
 constexpr float FOG_ALPHA_PER_DENSITY = 255.0f;
+
+// A skinned vertex's joints and weights, the second vertex stream (Mesh.slang's SkinnedInput): the
+// weights as bytes (the first in memory first), 12 bytes in all, as phones like vertices small.
+struct SkinVertex
+{
+    std::array<uint16_t, 4> Joints{};
+    uint32_t Weights = 0;
+};
+static_assert(sizeof(SkinVertex) == 12, "A skinned vertex's joints and weights are 12 bytes");
+
+// Rows of joints (three a joint) a joint set starts on, so its range starts where a storage buffer's
+// may; and the least the joints' buffer is made (it grows to fit).
+constexpr size_t JOINT_ROW_ALIGNMENT = rhi::STORAGE_BUFFER_ALIGNMENT / sizeof(glm::vec4);
+constexpr size_t LEAST_JOINT_BUFFER = 64 * 1024;
 
 uint32_t PackFog(Color fog, float density)
 {
@@ -76,50 +91,67 @@ Result<void> Renderer3D::Initialize(rhi::IRenderDevice& renderDevice)
     }
 
 #if !defined(__EMSCRIPTEN__)
-    for (size_t i = 0; i < PIPELINE_COUNT; ++i)
+    constexpr std::array<std::array<const char*, PIPELINE_COUNT>, 2> NAMES{{
+        {"Mesh (opaque)", "Mesh (opaque, two-sided)", "Mesh (alpha)", "Mesh (additive)"},
+        {"Mesh (opaque, skinned)", "Mesh (opaque, two-sided, skinned)", "Mesh (alpha, skinned)",
+         "Mesh (additive, skinned)"},
+    }};
+    for (const bool isSkinned : {false, true})
     {
-        rhi::PipelineDesc desc;
-        desc.Spirv = MESH_SPIRV;
-        desc.PushConstantSize = sizeof(MeshConstants);
-        desc.TextureCount = 1;
-        desc.VertexBindings = {{0, sizeof(MeshVertex), rhi::VertexInputRate::Vertex}};
-        desc.VertexAttributes = {
-            {0, 0, rhi::VertexFormat::Float3, static_cast<uint32_t>(offsetof(MeshVertex, Position))},
-            {1, 0, rhi::VertexFormat::Float3, static_cast<uint32_t>(offsetof(MeshVertex, Normal))},
-            {2, 0, rhi::VertexFormat::Float2, static_cast<uint32_t>(offsetof(MeshVertex, Uv))},
-            {3, 0, rhi::VertexFormat::UByte4Norm, static_cast<uint32_t>(offsetof(MeshVertex, Color))},
-        };
-        // Triangles wound counter-clockwise seen from the front stay so on screen (Camera3D).
-        desc.Front = rhi::FrontFace::CounterClockwise;
-        switch (i)
+        for (size_t i = 0; i < PIPELINE_COUNT; ++i)
         {
-        case 0:
-            desc.Depth = rhi::DepthMode::TestAndWrite;
-            desc.Cull = rhi::CullMode::Back;
-            desc.DebugName = "Mesh (opaque)";
-            break;
-        case 1:
-            desc.Depth = rhi::DepthMode::TestAndWrite;
-            desc.DebugName = "Mesh (opaque, two-sided)";
-            break;
-        case 2:
-            // Seen through: tested against the solid, but hiding nothing.
-            desc.Depth = rhi::DepthMode::Test;
-            desc.Blend = rhi::BlendMode::Alpha;
-            desc.DebugName = "Mesh (alpha)";
-            break;
-        default:
-            desc.Depth = rhi::DepthMode::Test;
-            desc.Blend = rhi::BlendMode::Additive;
-            desc.DebugName = "Mesh (additive)";
-            break;
+            rhi::PipelineDesc desc;
+            desc.Spirv = MESH_SPIRV;
+            desc.PushConstantSize = sizeof(MeshConstants);
+            desc.TextureCount = 1;
+            desc.VertexBindings = {{0, sizeof(MeshVertex), rhi::VertexInputRate::Vertex}};
+            desc.VertexAttributes = {
+                {0, 0, rhi::VertexFormat::Float3, static_cast<uint32_t>(offsetof(MeshVertex, Position))},
+                {1, 0, rhi::VertexFormat::Float3, static_cast<uint32_t>(offsetof(MeshVertex, Normal))},
+                {2, 0, rhi::VertexFormat::Float2, static_cast<uint32_t>(offsetof(MeshVertex, Uv))},
+                {3, 0, rhi::VertexFormat::UByte4Norm, static_cast<uint32_t>(offsetof(MeshVertex, Color))},
+            };
+            if (isSkinned)
+            {
+                // Each vertex's joints and weights from a second stream, the joints from a storage
+                // buffer.
+                desc.VertexEntry = "vertexSkinned";
+                desc.StorageBufferCount = 1;
+                desc.VertexBindings.push_back({1, sizeof(SkinVertex), rhi::VertexInputRate::Vertex});
+                desc.VertexAttributes.push_back(
+                    {4, 1, rhi::VertexFormat::UShort4, static_cast<uint32_t>(offsetof(SkinVertex, Joints))});
+                desc.VertexAttributes.push_back(
+                    {5, 1, rhi::VertexFormat::UByte4Norm, static_cast<uint32_t>(offsetof(SkinVertex, Weights))});
+            }
+            // Triangles wound counter-clockwise seen from the front stay so on screen (Camera3D).
+            desc.Front = rhi::FrontFace::CounterClockwise;
+            desc.DebugName = NAMES[isSkinned ? 1 : 0][i];
+            switch (i)
+            {
+            case 0:
+                desc.Depth = rhi::DepthMode::TestAndWrite;
+                desc.Cull = rhi::CullMode::Back;
+                break;
+            case 1:
+                desc.Depth = rhi::DepthMode::TestAndWrite;
+                break;
+            case 2:
+                // Seen through: tested against the solid, but hiding nothing.
+                desc.Depth = rhi::DepthMode::Test;
+                desc.Blend = rhi::BlendMode::Alpha;
+                break;
+            default:
+                desc.Depth = rhi::DepthMode::Test;
+                desc.Blend = rhi::BlendMode::Additive;
+                break;
+            }
+            Result<rhi::PipelineHandle> pipeline = device->CreatePipeline(desc);
+            if (!pipeline)
+            {
+                return pipeline.GetError();
+            }
+            (isSkinned ? skinnedPipelines : pipelines)[i] = pipeline.Value();
         }
-        Result<rhi::PipelineHandle> pipeline = device->CreatePipeline(desc);
-        if (!pipeline)
-        {
-            return pipeline.GetError();
-        }
-        pipelines[i] = pipeline.Value();
     }
 #endif
 
@@ -164,16 +196,34 @@ void Renderer3D::Shutdown()
         {
             device->Destroy(mesh.Vertices);
             device->Destroy(mesh.Indices);
+            if (mesh.Skin.IsValid())
+            {
+                device->Destroy(mesh.Skin);
+            }
         });
     meshes.Clear();
-    for (rhi::PipelineHandle& pipeline : pipelines)
+    for (std::array<rhi::PipelineHandle, PIPELINE_COUNT>* set : {&pipelines, &skinnedPipelines})
     {
-        if (pipeline.IsValid())
+        for (rhi::PipelineHandle& pipeline : *set)
         {
-            device->Destroy(pipeline);
-            pipeline = {};
+            if (pipeline.IsValid())
+            {
+                device->Destroy(pipeline);
+                pipeline = {};
+            }
         }
     }
+    for (size_t frame = 0; frame < jointBuffers.size(); ++frame)
+    {
+        if (jointBuffers[frame].IsValid())
+        {
+            device->Destroy(jointBuffers[frame]);
+        }
+        jointBuffers[frame] = {};
+        jointBufferSizes[frame] = 0;
+    }
+    jointRows.clear();
+    jointSets.clear();
     if (sampler.IsValid())
     {
         device->Destroy(sampler);
@@ -272,6 +322,47 @@ Result<MeshHandle> Renderer3D::CreateDynamicMesh(const MeshData& data, const cha
     return made;
 }
 
+Result<MeshHandle> Renderer3D::CreateSkinnedMesh(const MeshData& data, std::span<const VertexJoints> skin,
+                                                 bool isDynamic, const char* debugName)
+{
+    if (skin.size() != data.Vertices.size())
+    {
+        return Error{std::string("A skinned mesh needs joints for each vertex (") + debugName + ")"};
+    }
+    Result<MeshHandle> made = isDynamic ? CreateDynamicMesh(data, debugName) : CreateMesh(data, debugName);
+    if (!made)
+    {
+        return made;
+    }
+    std::vector<SkinVertex> packed(skin.size());
+    for (size_t i = 0; i < skin.size(); ++i)
+    {
+        packed[i].Joints = skin[i].Joints;
+        for (int k = 0; k < 4; ++k)
+        {
+            const auto weight = static_cast<uint32_t>(std::lround(std::clamp(skin[i].Weights[k], 0.0f, 1.0f) * 255.0f));
+            packed[i].Weights |= weight << (8U * static_cast<uint32_t>(k));
+        }
+    }
+    rhi::BufferDesc desc;
+    desc.Size = packed.size() * sizeof(SkinVertex);
+    desc.Usage = rhi::BufferUsage::Vertex;
+    desc.DebugName = debugName;
+    Result<rhi::BufferHandle> buffer = device->CreateBuffer(desc);
+    Result<void> uploaded =
+        buffer ? device->UploadBuffer(buffer.Value(), packed.data(), desc.Size, 0) : Result<void>(buffer.GetError());
+    if (buffer)
+    {
+        meshes.Get(made.Value())->Skin = buffer.Value();
+    }
+    if (!uploaded)
+    {
+        Destroy(made.Value());
+        return uploaded.GetError();
+    }
+    return made;
+}
+
 Result<void> Renderer3D::UpdateMesh(MeshHandle mesh, std::span<const MeshVertex> vertices)
 {
     GpuMesh* found = meshes.Get(mesh);
@@ -302,15 +393,41 @@ void Renderer3D::Destroy(MeshHandle mesh)
                 device->Destroy(copy);
             }
         }
+        if (found->Skin.IsValid())
+        {
+            device->Destroy(found->Skin);
+        }
         meshes.Destroy(mesh);
     }
 }
 
-void Renderer3D::Draw(MeshHandle mesh, const glm::mat4& transform, const Material& material)
+JointSet Renderer3D::AddJoints(std::span<const glm::mat4> joints)
+{
+    if (!isAvailable || joints.empty())
+    {
+        return {};
+    }
+    // Each joint's matrix as three rows: Mesh.slang's jointRows.
+    const size_t first = (jointRows.size() + JOINT_ROW_ALIGNMENT - 1) / JOINT_ROW_ALIGNMENT * JOINT_ROW_ALIGNMENT;
+    jointRows.resize(first + (joints.size() * 3));
+    for (size_t joint = 0; joint < joints.size(); ++joint)
+    {
+        const glm::mat4& matrix = joints[joint];
+        for (int row = 0; row < 3; ++row)
+        {
+            jointRows[first + (joint * 3) + static_cast<size_t>(row)] =
+                glm::vec4(matrix[0][row], matrix[1][row], matrix[2][row], matrix[3][row]);
+        }
+    }
+    jointSets.emplace_back(first, joints.size() * 3);
+    return {static_cast<uint32_t>(jointSets.size() - 1)};
+}
+
+void Renderer3D::Draw(MeshHandle mesh, const glm::mat4& transform, const Material& material, JointSet joints)
 {
     if (isAvailable && meshes.Contains(mesh))
     {
-        draws.push_back({mesh, transform, material, 0.0f});
+        draws.push_back({mesh, transform, material, 0.0f, joints});
     }
 }
 
@@ -334,6 +451,8 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
     if (!isAvailable || draws.empty())
     {
         draws.clear();
+        jointRows.clear();
+        jointSets.clear();
         return;
     }
 
@@ -364,8 +483,40 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
         colors[slot] = {PackMeshColor(lighting.Light), PackMeshColor(lighting.Sky), PackMeshColor(lighting.Ground),
                         PackFog(lighting.Fog, lighting.FogDensity)};
     }
-    size_t boundPipeline = PIPELINE_COUNT;
     const uint32_t frame = device->GetFrameIndex();
+    // This frame's joints up to the GPU, in this frame's buffer (made bigger if it must be). Without
+    // it, skinned meshes are drawn as they rest.
+    rhi::BufferHandle joints;
+    if (const size_t bytes = jointRows.size() * sizeof(glm::vec4); bytes > 0)
+    {
+        if (jointBufferSizes[frame] < bytes)
+        {
+            if (jointBuffers[frame].IsValid())
+            {
+                device->Destroy(jointBuffers[frame]);
+            }
+            rhi::BufferDesc desc;
+            desc.Size = std::max(bytes * 2, LEAST_JOINT_BUFFER);
+            desc.Usage = rhi::BufferUsage::Storage;
+            desc.Memory = rhi::MemoryUsage::CpuToGpu;
+            desc.DebugName = "3D joints";
+            Result<rhi::BufferHandle> made = device->CreateBuffer(desc);
+            jointBuffers[frame] = made ? made.Value() : rhi::BufferHandle{};
+            jointBufferSizes[frame] = made ? desc.Size : 0;
+            if (!made)
+            {
+                HYOSHI_LOG_ERROR("3D: joints: {}", made.GetError().Message);
+            }
+        }
+        if (jointBuffers[frame].IsValid())
+        {
+            if (Result<void> uploaded = device->UploadBuffer(jointBuffers[frame], jointRows.data(), bytes, 0); uploaded)
+            {
+                joints = jointBuffers[frame];
+            }
+        }
+    }
+    size_t boundPipeline = PIPELINE_COUNT * 2;
     for (const DrawItem& item : draws)
     {
         GpuMesh* mesh = meshes.Get(item.Mesh);
@@ -388,13 +539,22 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
                 }
             }
         }
-        if (const size_t pipeline = GetPipelineIndex(item.Surface); pipeline != boundPipeline)
+        const bool isSkinned =
+            mesh->Skin.IsValid() && joints.IsValid() && item.Joints.IsValid() && item.Joints.Index < jointSets.size();
+        const size_t pipeline = GetPipelineIndex(item.Surface);
+        if (const size_t bound = pipeline + (isSkinned ? PIPELINE_COUNT : 0); bound != boundPipeline)
         {
-            commands.BindPipeline(pipelines[pipeline]);
-            boundPipeline = pipeline;
+            commands.BindPipeline((isSkinned ? skinnedPipelines : pipelines)[pipeline]);
+            boundPipeline = bound;
         }
         commands.BindTexture(0, item.Surface.Texture.IsValid() ? item.Surface.Texture : whiteTexture, sampler);
         commands.BindVertexBuffer(0, vertices, 0);
+        if (isSkinned)
+        {
+            const auto [firstRow, rows] = jointSets[item.Joints.Index];
+            commands.BindVertexBuffer(1, mesh->Skin, 0);
+            commands.BindStorageBuffer(0, joints, firstRow * sizeof(glm::vec4), rows * sizeof(glm::vec4));
+        }
         commands.BindIndexBuffer(mesh->Indices, 0, rhi::IndexType::UInt32);
 
         // The light and the camera moved into the object's space, where its normals are.
@@ -420,6 +580,8 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
         commands.DrawIndexed(mesh->IndexCount, 1, 0, 0, 0);
     }
     draws.clear();
+    jointRows.clear();
+    jointSets.clear();
 }
 
 } // namespace hyoshi::renderer

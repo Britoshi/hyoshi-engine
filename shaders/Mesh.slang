@@ -3,6 +3,8 @@
 // (emission); smoothly or as a cartoon is (toon, from the light's alpha); fogged with distance. Colors arrive as sRGB, as everywhere in the engine; lighting is
 // done in linear light and written back as sRGB, since the swapchain takes colors as they are.
 // Everything per draw fits the 128 bytes of push constants every device has (Renderer3D.cpp).
+// A skinned mesh (vertexSkinned) is moved by its joints here, on the GPU: the CPU sends the joints
+// each frame, not the vertices.
 
 struct MeshConstants
 {
@@ -33,6 +35,14 @@ ConstantBuffer<MeshConstants> constants;
 [[vk::binding(0, 0)]]
 Sampler2D baseTexture;
 
+// Not on the web, which has no 3D yet.
+#if !defined(HYOSHI_WGSL)
+// A skinned mesh's joints this frame (Renderer3D::AddJoints): each joint's matrix as three rows
+// (the fourth, 0 0 0 1, left out).
+[[vk::binding(1, 0)]]
+StructuredBuffer<float4> jointRows;
+#endif
+
 // Fog's density per unit of distance at an alpha of 255.
 static const float FOG_DENSITY_SCALE = 1.0;
 // Toon: where the light's side ends (the cosine toward the light) and how soft that edge is; the
@@ -48,6 +58,18 @@ struct VertexInput
     [[vk::location(1)]] float3 normal;
     [[vk::location(2)]] float2 uv;
     [[vk::location(3)]] float4 color;
+};
+
+// And the joints a skinned vertex moves with (up to four), and how much each moves it (summing to
+// about 1; all 0 for a vertex that stays where it is).
+struct SkinnedInput
+{
+    [[vk::location(0)]] float3 position;
+    [[vk::location(1)]] float3 normal;
+    [[vk::location(2)]] float2 uv;
+    [[vk::location(3)]] float4 color;
+    [[vk::location(4)]] uint4 joints;
+    [[vk::location(5)]] float4 weights;
 };
 
 struct VertexOutput
@@ -78,19 +100,57 @@ float3 ToSrgb(float3 color)
     return pow(max(color, float3(0.0)), float3(1.0 / 2.2));
 }
 
-[shader("vertex")]
-VertexOutput vertexMain(VertexInput input)
+VertexOutput Place(float3 position, float3 normal, float2 uv, float4 color)
 {
     VertexOutput output;
-    output.position = constants.clip0 * input.position.x + constants.clip1 * input.position.y +
-                      constants.clip2 * input.position.z + constants.clip3;
-    output.objectPosition = input.position;
-    output.normal = input.normal;
-    output.uv = input.uv;
-    output.color = input.color;
+    output.position = constants.clip0 * position.x + constants.clip1 * position.y + constants.clip2 * position.z +
+                      constants.clip3;
+    output.objectPosition = position;
+    output.normal = normal;
+    output.uv = uv;
+    output.color = color;
     output.viewDepth = output.position.w;
     return output;
 }
+
+[shader("vertex")]
+VertexOutput vertexMain(VertexInput input)
+{
+    return Place(input.position, input.normal, input.uv, input.color);
+}
+
+#if !defined(HYOSHI_WGSL)
+// Moved by its joints' matrices blended by weight (the weights made to sum to 1, as bytes rarely do
+// exactly), as renderer/Skinning's SkinVertices does on the CPU.
+[shader("vertex")]
+VertexOutput vertexSkinned(SkinnedInput input)
+{
+    float total = dot(input.weights, float4(1.0));
+    if (total <= 0.0)
+    {
+        return Place(input.position, input.normal, input.uv, input.color);
+    }
+    float4 row0 = float4(0.0);
+    float4 row1 = float4(0.0);
+    float4 row2 = float4(0.0);
+    for (int k = 0; k < 4; ++k)
+    {
+        float weight = input.weights[k] / total;
+        if (weight > 0.0)
+        {
+            uint first = input.joints[k] * 3u;
+            row0 += jointRows[first] * weight;
+            row1 += jointRows[first + 1u] * weight;
+            row2 += jointRows[first + 2u] * weight;
+        }
+    }
+    float4 position = float4(input.position, 1.0);
+    float3 normal = float3(dot(row0.xyz, input.normal), dot(row1.xyz, input.normal), dot(row2.xyz, input.normal));
+    float length = sqrt(dot(normal, normal));
+    return Place(float3(dot(row0, position), dot(row1, position), dot(row2, position)),
+                 length > 0.0 ? normal / length : input.normal, input.uv, input.color);
+}
+#endif
 
 [shader("fragment")]
 float4 fragmentMain(VertexOutput input, bool isFrontFace: SV_IsFrontFace) : SV_Target

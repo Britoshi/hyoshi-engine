@@ -4,6 +4,7 @@
 #include "core/Result.h"
 #include "renderer/Camera3D.h"
 #include "renderer/Mesh.h"
+#include "renderer/Model.h"
 #include "renderer/SpriteBatch.h"
 #include "rhi/IRenderDevice.h"
 
@@ -11,8 +12,10 @@
 #include <glm/vec3.hpp>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace hyoshi::renderer
@@ -20,6 +23,19 @@ namespace hyoshi::renderer
 
 struct MeshTag;
 using MeshHandle = Handle<MeshTag>;
+
+// Which of this frame's joints (Renderer3D::AddJoints) a skinned mesh is drawn with; none: as it
+// rests.
+struct JointSet
+{
+    static constexpr uint32_t NONE = UINT32_MAX;
+    uint32_t Index = NONE;
+
+    bool IsValid() const
+    {
+        return Index != NONE;
+    }
+};
 
 enum class MaterialBlend : uint8_t
 {
@@ -89,6 +105,11 @@ public:
     // triangles stay), seen from the next frame drawn. Each frame in flight has its own copy.
     Result<MeshHandle> CreateDynamicMesh(const MeshData& data, const char* debugName = "mesh");
     Result<void> UpdateMesh(MeshHandle mesh, std::span<const MeshVertex> vertices);
+    // A skinned mesh (a model's skinned part: `skin`, one for each vertex), moved by its joints on the
+    // GPU as it's drawn (Draw, with AddJoints's), so the CPU sends joints each frame, not vertices.
+    // `isDynamic`: its vertices at rest change too (blend shapes: UpdateMesh, as CreateDynamicMesh's).
+    Result<MeshHandle> CreateSkinnedMesh(const MeshData& data, std::span<const VertexJoints> skin, bool isDynamic,
+                                         const char* debugName = "mesh");
     void Destroy(MeshHandle mesh);
 
     void SetCamera(const Camera3D& newCamera)
@@ -109,9 +130,14 @@ public:
         }
     }
 
+    // Joints to draw skinned meshes with this frame (PoseJoints's: each joint's node transform times
+    // its inverse bind), forgotten after it; none where there's no 3D. One set serves every part of
+    // a model in a pose.
+    JointSet AddJoints(std::span<const glm::mat4> joints);
+
     // Draws the mesh this frame, placed by `transform` (moves, turns, and sizes; sizes alike on each
-    // axis keep the lighting right).
-    void Draw(MeshHandle mesh, const glm::mat4& transform, const Material& material);
+    // axis keep the lighting right); a skinned mesh moved by `joints` (without, as it rests).
+    void Draw(MeshHandle mesh, const glm::mat4& transform, const Material& material, JointSet joints = {});
 
     // The app's: draws this frame's meshes inside the render pass, then forgets them.
     void Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent, rhi::SurfaceTransform surfaceTransform);
@@ -127,6 +153,8 @@ private:
         std::array<rhi::BufferHandle, rhi::MAX_FRAMES_IN_FLIGHT> FrameVertices{};
         std::vector<MeshVertex> Latest;
         uint32_t StaleFrames = 0;
+        // A skinned mesh's: each vertex's joints and weights (the second vertex stream).
+        rhi::BufferHandle Skin;
     };
 
     struct DrawItem
@@ -136,6 +164,7 @@ private:
         Material Surface;
         // Ordering: solid, then see-through, then added; within each, by distance from the camera.
         float SortKey = 0.0f;
+        JointSet Joints;
     };
 
     // Opaque one-sided, opaque two-sided, alpha, additive.
@@ -146,12 +175,21 @@ private:
     rhi::IRenderDevice* device = nullptr;
     bool isAvailable = false;
     std::array<rhi::PipelineHandle, PIPELINE_COUNT> pipelines{};
+    // The same, for skinned meshes.
+    std::array<rhi::PipelineHandle, PIPELINE_COUNT> skinnedPipelines{};
     rhi::SamplerHandle sampler;
     rhi::TextureHandle whiteTexture;
     HandlePool<GpuMesh, MeshTag> meshes;
     Camera3D camera;
     std::array<Lighting, LIGHTING_SLOTS> lightings{};
     std::vector<DrawItem> draws;
+    // This frame's joints (AddJoints), three rows each, each set from a row the storage buffer's
+    // alignment allows; each set's first row and rows; and the buffer they go up in, for each frame in
+    // flight, with its size.
+    std::vector<glm::vec4> jointRows;
+    std::vector<std::pair<size_t, size_t>> jointSets;
+    std::array<rhi::BufferHandle, rhi::MAX_FRAMES_IN_FLIGHT> jointBuffers{};
+    std::array<size_t, rhi::MAX_FRAMES_IN_FLIGHT> jointBufferSizes{};
 };
 
 } // namespace hyoshi::renderer

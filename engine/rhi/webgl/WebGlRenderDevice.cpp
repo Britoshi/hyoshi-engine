@@ -39,6 +39,8 @@ GlAttributeFormat ToGlFormat(VertexFormat format)
         return {4, GL_UNSIGNED_BYTE, true, false};
     case VertexFormat::UInt:
         return {1, GL_UNSIGNED_INT, false, true};
+    case VertexFormat::UShort4:
+        return {4, GL_UNSIGNED_SHORT, false, true};
     }
     return {};
 }

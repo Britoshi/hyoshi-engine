@@ -101,6 +101,8 @@ VkFormat ToVkFormat(VertexFormat format)
         return VK_FORMAT_R8G8B8A8_UNORM;
     case VertexFormat::UInt:
         return VK_FORMAT_R32_UINT;
+    case VertexFormat::UShort4:
+        return VK_FORMAT_R16G16B16A16_UINT;
     }
     return VK_FORMAT_UNDEFINED;
 }
@@ -138,7 +140,9 @@ void VulkanCommandList::Reset(VkCommandBuffer newCommandBuffer)
     boundSetLayout = VK_NULL_HANDLE;
     boundTextureCount = 0;
     boundTextures = {};
-    areTexturesDirty = false;
+    boundStorageBufferCount = 0;
+    boundStorageBuffers = {};
+    areDescriptorsDirty = false;
     isInRenderPass = false;
 }
 
@@ -180,7 +184,8 @@ void VulkanCommandList::BindPipeline(PipelineHandle pipeline)
     boundLayout = data->Layout;
     boundSetLayout = data->SetLayout;
     boundTextureCount = data->TextureCount;
-    areTexturesDirty = boundTextureCount > 0;
+    boundStorageBufferCount = data->StorageBufferCount;
+    areDescriptorsDirty = boundTextureCount + boundStorageBufferCount > 0;
 }
 
 void VulkanCommandList::BindVertexBuffer(uint32_t binding, BufferHandle buffer, size_t offset)
@@ -207,16 +212,29 @@ void VulkanCommandList::BindTexture(uint32_t slot, TextureHandle texture, Sample
     HYOSHI_ASSERT(textureData != nullptr && samplerData != nullptr, "Invalid or destroyed texture or sampler");
 
     boundTextures[slot] = {samplerData->Sampler, textureData->View, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    areTexturesDirty = true;
+    areDescriptorsDirty = true;
 }
 
-void VulkanCommandList::FlushTextures()
+void VulkanCommandList::BindStorageBuffer(uint32_t slot, BufferHandle buffer, size_t offset, size_t size)
 {
-    if (!areTexturesDirty || boundTextureCount == 0)
+    HYOSHI_ASSERT(slot < MAX_STORAGE_BUFFER_SLOTS);
+    HYOSHI_ASSERT(offset % STORAGE_BUFFER_ALIGNMENT == 0, "A storage buffer's range starts aligned");
+    const VulkanRenderDevice::BufferData* data = device.buffers.Get(buffer);
+    HYOSHI_ASSERT(data != nullptr && data->Usage == BufferUsage::Storage,
+                  "Invalid, destroyed, or not a storage buffer");
+    HYOSHI_ASSERT(offset + size <= data->Size, "A storage buffer's range runs past its end");
+    boundStorageBuffers[slot] = {data->Buffer, offset, size};
+    areDescriptorsDirty = true;
+}
+
+void VulkanCommandList::FlushDescriptors()
+{
+    const uint32_t count = boundTextureCount + boundStorageBufferCount;
+    if (!areDescriptorsDirty || count == 0)
     {
         return;
     }
-    areTexturesDirty = false;
+    areDescriptorsDirty = false;
 
     const VkDescriptorSet set = device.AllocateDescriptorSet(boundSetLayout);
     if (set == VK_NULL_HANDLE)
@@ -224,18 +242,30 @@ void VulkanCommandList::FlushTextures()
         return;
     }
 
-    std::array<VkWriteDescriptorSet, MAX_TEXTURE_SLOTS> writes{};
-    for (uint32_t slot = 0; slot < boundTextureCount; ++slot)
+    std::array<VkWriteDescriptorSet, MAX_TEXTURE_SLOTS + MAX_STORAGE_BUFFER_SLOTS> writes{};
+    for (uint32_t binding = 0; binding < count; ++binding)
     {
-        HYOSHI_ASSERT(boundTextures[slot].imageView != VK_NULL_HANDLE, "A texture slot the pipeline uses is unbound");
-        writes[slot].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[slot].dstSet = set;
-        writes[slot].dstBinding = slot;
-        writes[slot].descriptorCount = 1;
-        writes[slot].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[slot].pImageInfo = &boundTextures[slot];
+        VkWriteDescriptorSet& write = writes[binding];
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = set;
+        write.dstBinding = binding;
+        write.descriptorCount = 1;
+        if (binding < boundTextureCount)
+        {
+            HYOSHI_ASSERT(boundTextures[binding].imageView != VK_NULL_HANDLE,
+                          "A texture slot the pipeline uses is unbound");
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo = &boundTextures[binding];
+        }
+        else
+        {
+            const VkDescriptorBufferInfo& buffer = boundStorageBuffers[binding - boundTextureCount];
+            HYOSHI_ASSERT(buffer.buffer != VK_NULL_HANDLE, "A storage buffer slot the pipeline uses is unbound");
+            write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            write.pBufferInfo = &buffer;
+        }
     }
-    vkUpdateDescriptorSets(device.device, boundTextureCount, writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(device.device, count, writes.data(), 0, nullptr);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, boundLayout, 0, 1, &set, 0, nullptr);
 }
 
@@ -259,14 +289,14 @@ void VulkanCommandList::SetScissor(const Rect& scissor)
 
 void VulkanCommandList::Draw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
 {
-    FlushTextures();
+    FlushDescriptors();
     vkCmdDraw(commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
 }
 
 void VulkanCommandList::DrawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex,
                                     int32_t vertexOffset, uint32_t firstInstance)
 {
-    FlushTextures();
+    FlushDescriptors();
     vkCmdDrawIndexed(commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
 }
 
@@ -1080,11 +1110,12 @@ Result<PipelineHandle> VulkanRenderDevice::CreatePipeline(const PipelineDesc& de
 
     PipelineData data;
     data.TextureCount = desc.TextureCount;
+    data.StorageBufferCount = desc.StorageBufferCount;
 
     Result<void> result;
-    if (desc.TextureCount > 0)
+    if (desc.TextureCount + desc.StorageBufferCount > 0)
     {
-        Result<VkDescriptorSetLayout> setLayout = GetSetLayout(desc.TextureCount);
+        Result<VkDescriptorSetLayout> setLayout = GetSetLayout(desc.TextureCount, desc.StorageBufferCount);
         if (setLayout)
         {
             data.SetLayout = setLayout.Value();

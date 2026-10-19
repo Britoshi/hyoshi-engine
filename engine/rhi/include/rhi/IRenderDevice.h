@@ -29,6 +29,10 @@ public:
     virtual void BindIndexBuffer(BufferHandle buffer, size_t offset, IndexType type) = 0;
     // Takes effect at the next draw. Slots are the pipeline's texture bindings.
     virtual void BindTexture(uint32_t slot, TextureHandle texture, SamplerHandle sampler) = 0;
+    // `size` bytes of a storage buffer (BufferUsage::Storage) from `offset`, a multiple of
+    // STORAGE_BUFFER_ALIGNMENT, for the pipeline's storage buffer `slot` (from 0, after its textures:
+    // PipelineDesc::StorageBufferCount). Takes effect at the next draw.
+    virtual void BindStorageBuffer(uint32_t slot, BufferHandle buffer, size_t offset, size_t size) = 0;
     virtual void PushConstants(const void* data, uint32_t size) = 0;
     virtual void SetViewport(const Viewport& viewport) = 0;
     virtual void SetScissor(const Rect& scissor) = 0;

@@ -23,6 +23,9 @@ using PipelineHandle = Handle<PipelineTag>;
 // Frames the CPU may record ahead of the GPU. Data rewritten every frame (CpuToGpu buffers) needs
 // this many copies, indexed by IRenderDevice::GetFrameIndex().
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+// What a storage buffer's bound range starts on (ICommandList::BindStorageBuffer): the most any
+// Vulkan device asks for.
+constexpr size_t STORAGE_BUFFER_ALIGNMENT = 256;
 
 enum class FrameStatus
 {
@@ -66,7 +69,9 @@ struct RenderPassDesc
 enum class BufferUsage
 {
     Vertex,
-    Index
+    Index,
+    // Read by the vertex stage as an array (BindStorageBuffer): a skinned mesh's joints, say.
+    Storage
 };
 
 enum class MemoryUsage
@@ -132,7 +137,9 @@ enum class VertexFormat
     Float4,
     // Four bytes normalized to 0..1, e.g. an RGBA8 color.
     UByte4Norm,
-    UInt
+    UInt,
+    // Four unsigned 16-bit integers, read as integers (uint4): a skinned vertex's joints, say.
+    UShort4
 };
 
 enum class VertexInputRate
@@ -225,6 +232,10 @@ struct PipelineDesc
     // Textures sampled by the fragment stage, at set 0, bindings 0..TextureCount-1. In Slang:
     // [[vk::binding(0, 0)]] Sampler2D texture;
     uint32_t TextureCount = 0;
+    // Storage buffers read by the vertex stage, at set 0, the bindings after the textures'. In Slang,
+    // after one texture: [[vk::binding(1, 0)]] StructuredBuffer<float4> rows; Not on the web, which
+    // has no 3D yet.
+    uint32_t StorageBufferCount = 0;
 
     const char* DebugName = "pipeline";
 };

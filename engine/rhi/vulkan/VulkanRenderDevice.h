@@ -37,6 +37,7 @@ public:
     void BindVertexBuffer(uint32_t binding, BufferHandle buffer, size_t offset) override;
     void BindIndexBuffer(BufferHandle buffer, size_t offset, IndexType type) override;
     void BindTexture(uint32_t slot, TextureHandle texture, SamplerHandle sampler) override;
+    void BindStorageBuffer(uint32_t slot, BufferHandle buffer, size_t offset, size_t size) override;
     void PushConstants(const void* data, uint32_t size) override;
     void SetViewport(const Viewport& viewport) override;
     void SetScissor(const Rect& scissor) override;
@@ -45,10 +46,12 @@ public:
                      uint32_t firstInstance) override;
 
     static constexpr uint32_t MAX_TEXTURE_SLOTS = 4;
+    static constexpr uint32_t MAX_STORAGE_BUFFER_SLOTS = 2;
 
 private:
-    // Writes and binds a descriptor set for the textures bound since the last draw.
-    void FlushTextures();
+    // Writes and binds a descriptor set for the textures and storage buffers bound since the last
+    // draw.
+    void FlushDescriptors();
 
     VulkanRenderDevice& device;
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
@@ -56,7 +59,9 @@ private:
     VkDescriptorSetLayout boundSetLayout = VK_NULL_HANDLE;
     uint32_t boundTextureCount = 0;
     std::array<VkDescriptorImageInfo, MAX_TEXTURE_SLOTS> boundTextures{};
-    bool areTexturesDirty = false;
+    uint32_t boundStorageBufferCount = 0;
+    std::array<VkDescriptorBufferInfo, MAX_STORAGE_BUFFER_SLOTS> boundStorageBuffers{};
+    bool areDescriptorsDirty = false;
     bool isInRenderPass = false;
 };
 
@@ -137,9 +142,10 @@ private:
     {
         VkPipeline Pipeline = VK_NULL_HANDLE;
         VkPipelineLayout Layout = VK_NULL_HANDLE;
-        // Shared, owned by setLayoutsByTextureCount.
+        // Shared, owned by setLayouts.
         VkDescriptorSetLayout SetLayout = VK_NULL_HANDLE;
         uint32_t TextureCount = 0;
+        uint32_t StorageBufferCount = 0;
     };
 
     struct FrameData
@@ -184,7 +190,8 @@ private:
     void WritePendingScreenshot();
 
     Result<void> SubmitImmediate(const std::function<void(VkCommandBuffer)>& record);
-    Result<VkDescriptorSetLayout> GetSetLayout(uint32_t textureCount);
+    // Textures (for the fragment stage), then storage buffers (for the vertex stage), at set 0.
+    Result<VkDescriptorSetLayout> GetSetLayout(uint32_t textureCount, uint32_t storageBufferCount);
     VkDescriptorSet AllocateDescriptorSet(VkDescriptorSetLayout layout);
     void DeferDeletion(std::function<void()> deletion);
     void RunPendingDeletions();
@@ -227,7 +234,8 @@ private:
     HandlePool<TextureData, TextureTag> textures;
     HandlePool<SamplerData, SamplerTag> samplers;
     HandlePool<PipelineData, PipelineTag> pipelines;
-    std::unordered_map<uint32_t, VkDescriptorSetLayout> setLayoutsByTextureCount;
+    // By their textures and storage buffers: textureCount + (storageBufferCount << 8).
+    std::unordered_map<uint32_t, VkDescriptorSetLayout> setLayouts;
     VulkanPipelineCache pipelineCache;
 
     uint64_t submittedCount = 0;

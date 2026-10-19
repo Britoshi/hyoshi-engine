@@ -49,6 +49,8 @@ WGPUVertexFormat ToWgpuFormat(VertexFormat format)
         return WGPUVertexFormat_Unorm8x4;
     case VertexFormat::UInt:
         return WGPUVertexFormat_Uint32;
+    case VertexFormat::UShort4:
+        return WGPUVertexFormat_Uint16x4;
     }
     return WGPUVertexFormat_Float32;
 }
@@ -427,8 +429,19 @@ Result<BufferHandle> WebGpuRenderDevice::CreateBuffer(const BufferDesc& desc)
 {
     WGPUBufferDescriptor bufferDesc = WGPU_BUFFER_DESCRIPTOR_INIT;
     bufferDesc.label = ToStringView(desc.DebugName);
-    bufferDesc.usage =
-        (desc.Usage == BufferUsage::Index ? WGPUBufferUsage_Index : WGPUBufferUsage_Vertex) | WGPUBufferUsage_CopyDst;
+    bufferDesc.usage = WGPUBufferUsage_CopyDst;
+    switch (desc.Usage)
+    {
+    case BufferUsage::Index:
+        bufferDesc.usage |= WGPUBufferUsage_Index;
+        break;
+    case BufferUsage::Storage:
+        bufferDesc.usage |= WGPUBufferUsage_Storage;
+        break;
+    case BufferUsage::Vertex:
+        bufferDesc.usage |= WGPUBufferUsage_Vertex;
+        break;
+    }
     bufferDesc.size = AlignUp4(desc.Size);
     const WGPUBuffer buffer = wgpuDeviceCreateBuffer(device, &bufferDesc);
     if (buffer == nullptr)

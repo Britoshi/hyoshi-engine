@@ -31,6 +31,10 @@ public:
     void BindVertexBuffer(uint32_t binding, BufferHandle buffer, size_t offset) override;
     void BindIndexBuffer(BufferHandle buffer, size_t offset, IndexType type) override;
     void BindTexture(uint32_t slot, TextureHandle texture, SamplerHandle sampler) override;
+    // None here: storage buffers are read by 3D's skinned meshes, and the web has no 3D yet.
+    void BindStorageBuffer(uint32_t /*slot*/, BufferHandle /*buffer*/, size_t /*offset*/, size_t /*size*/) override
+    {
+    }
     void PushConstants(const void* data, uint32_t size) override;
     void SetViewport(const Viewport& viewport) override;
     void SetScissor(const Rect& scissor) override;
