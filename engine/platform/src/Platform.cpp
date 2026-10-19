@@ -539,6 +539,8 @@ void Platform::PumpEvents()
                 inputEvent.Type = input::InputEventType::PointerMove;
                 inputEvent.X = event.motion.x;
                 inputEvent.Y = event.motion.y;
+                inputEvent.MoveX = event.motion.xrel / static_cast<float>(width > 0 ? width : 1);
+                inputEvent.MoveY = event.motion.yrel / static_cast<float>(height > 0 ? height : 1);
             }
             else
             {

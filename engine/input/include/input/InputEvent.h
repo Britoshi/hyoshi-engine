@@ -46,6 +46,10 @@ struct InputEvent
     float Y = 0.0f;
     // Axis value, or touch pressure.
     float Value = 0.0f;
+    // Pointer moves: how far the mouse itself moved (normalized as X and Y are), even against the
+    // window's edge while the pointer is locked (Platform::SetPointerLocked), for looking about with it.
+    float MoveX = 0.0f;
+    float MoveY = 0.0f;
     // A KeyDown from the OS repeating a held key. Menus use these; gameplay must ignore them.
     bool IsRepeat = false;
 };
@@ -79,6 +83,7 @@ constexpr uint32_t EQUALS = 46;
 constexpr uint32_t SEMICOLON = 51;
 constexpr uint32_t F1 = 58;
 constexpr uint32_t F2 = 59;
+constexpr uint32_t F3 = 60;
 constexpr uint32_t F5 = 62;
 constexpr uint32_t F11 = 68;
 constexpr uint32_t HOME = 74;
