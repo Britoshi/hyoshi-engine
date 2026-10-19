@@ -110,6 +110,9 @@ public:
     // `isDynamic`: its vertices at rest change too (blend shapes: UpdateMesh, as CreateDynamicMesh's).
     Result<MeshHandle> CreateSkinnedMesh(const MeshData& data, std::span<const VertexJoints> skin, bool isDynamic,
                                          const char* debugName = "mesh");
+    // A skinned mesh's vertices bound to other joints (one for each, as it was made with): a cloth
+    // bound to its points again, say. Seen from the next frame drawn.
+    Result<void> UpdateSkin(MeshHandle mesh, std::span<const VertexJoints> skin);
     void Destroy(MeshHandle mesh);
 
     void SetCamera(const Camera3D& newCamera)
@@ -148,6 +151,7 @@ private:
         rhi::BufferHandle Vertices;
         rhi::BufferHandle Indices;
         uint32_t IndexCount = 0;
+        uint32_t VertexCount = 0;
         // A dynamic mesh's: a copy of its vertices for each frame in flight, its latest vertices,
         // and which frames' copies are behind them (a bit each).
         std::array<rhi::BufferHandle, rhi::MAX_FRAMES_IN_FLIGHT> FrameVertices{};
@@ -171,6 +175,9 @@ private:
     static constexpr size_t PIPELINE_COUNT = 4;
 
     static size_t GetPipelineIndex(const Material& material);
+    // Each vertex's joints and weights, packed into a buffer on the GPU (a skinned mesh's second
+    // vertex stream).
+    Result<rhi::BufferHandle> CreateSkinBuffer(std::span<const VertexJoints> skin, const char* debugName);
 
     rhi::IRenderDevice* device = nullptr;
     bool isAvailable = false;

@@ -251,6 +251,7 @@ Result<MeshHandle> Renderer3D::CreateMesh(const MeshData& data, const char* debu
     }
     GpuMesh mesh;
     mesh.IndexCount = static_cast<uint32_t>(data.Indices.size());
+    mesh.VertexCount = static_cast<uint32_t>(data.Vertices.size());
     const size_t vertexBytes = data.Vertices.size() * sizeof(MeshVertex);
     const size_t indexBytes = data.Indices.size() * sizeof(uint32_t);
 
@@ -334,6 +335,40 @@ Result<MeshHandle> Renderer3D::CreateSkinnedMesh(const MeshData& data, std::span
     {
         return made;
     }
+    Result<rhi::BufferHandle> buffer = CreateSkinBuffer(skin, debugName);
+    if (!buffer)
+    {
+        Destroy(made.Value());
+        return buffer.GetError();
+    }
+    meshes.Get(made.Value())->Skin = buffer.Value();
+    return made;
+}
+
+Result<void> Renderer3D::UpdateSkin(MeshHandle mesh, std::span<const VertexJoints> skin)
+{
+    GpuMesh* found = meshes.Get(mesh);
+    if (found == nullptr || !found->Skin.IsValid())
+    {
+        return Error{"Not a skinned mesh"};
+    }
+    if (skin.size() != found->VertexCount)
+    {
+        return Error{"A skinned mesh keeps its number of vertices"};
+    }
+    Result<rhi::BufferHandle> buffer = CreateSkinBuffer(skin, "skin");
+    if (!buffer)
+    {
+        return buffer.GetError();
+    }
+    // The device holds the old until the frames using it are done.
+    device->Destroy(found->Skin);
+    found->Skin = buffer.Value();
+    return {};
+}
+
+Result<rhi::BufferHandle> Renderer3D::CreateSkinBuffer(std::span<const VertexJoints> skin, const char* debugName)
+{
     std::vector<SkinVertex> packed(skin.size());
     for (size_t i = 0; i < skin.size(); ++i)
     {
@@ -349,18 +384,16 @@ Result<MeshHandle> Renderer3D::CreateSkinnedMesh(const MeshData& data, std::span
     desc.Usage = rhi::BufferUsage::Vertex;
     desc.DebugName = debugName;
     Result<rhi::BufferHandle> buffer = device->CreateBuffer(desc);
-    Result<void> uploaded =
-        buffer ? device->UploadBuffer(buffer.Value(), packed.data(), desc.Size, 0) : Result<void>(buffer.GetError());
-    if (buffer)
+    if (!buffer)
     {
-        meshes.Get(made.Value())->Skin = buffer.Value();
+        return buffer;
     }
-    if (!uploaded)
+    if (Result<void> uploaded = device->UploadBuffer(buffer.Value(), packed.data(), desc.Size, 0); !uploaded)
     {
-        Destroy(made.Value());
+        device->Destroy(buffer.Value());
         return uploaded.GetError();
     }
-    return made;
+    return buffer;
 }
 
 Result<void> Renderer3D::UpdateMesh(MeshHandle mesh, std::span<const MeshVertex> vertices)

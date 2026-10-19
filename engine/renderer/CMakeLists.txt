@@ -3,6 +3,7 @@ add_library(hyoshi_renderer STATIC
     src/Camera3D.cpp
     src/Image.cpp
     src/Mesh.cpp
+    src/MeshCloth.cpp
     src/Model.cpp
     src/Renderer3D.cpp
     src/Skinning.cpp

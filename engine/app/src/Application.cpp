@@ -375,10 +375,10 @@ int Application::Run()
         if (isDebugVisible)
         {
             BuildStatsWindow();
-            if (scene)
-            {
-                scene->BuildDebugWindow();
-            }
+        }
+        if (scene && (isDebugVisible || scene->HasToolWindows()))
+        {
+            scene->BuildDebugWindow();
         }
 
         RenderFrame(frameSeconds);

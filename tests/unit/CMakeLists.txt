@@ -6,6 +6,7 @@ add_executable(hyoshi_unit_tests
     ChartTests.cpp
     CircleHitSoundsTests.cpp
     CircleTests.cpp
+    ClothTests.cpp
     ConcurrencyTests.cpp
     HandleTests.cpp
     ImageTests.cpp

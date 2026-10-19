@@ -52,9 +52,15 @@ public:
     // Updates and draws one frame. Widgets and sprites go through `ui`.
     virtual void RunFrame(const FrameContext& frame, ui::Ui& ui) = 0;
 
-    // Debug windows (ImGui), built only while the debug overlay shows.
+    // Debug windows (ImGui), built only while the debug overlay shows (or always: HasToolWindows).
     virtual void BuildDebugWindow()
     {
+    }
+
+    // The scene's debug windows are its tools (an editor's), shown without the overlay.
+    virtual bool HasToolWindows() const
+    {
+        return false;
     }
 
     // The scene's music, for app lifecycle handling and the exit checks.

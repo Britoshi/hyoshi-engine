@@ -172,7 +172,7 @@ private:
     // The editor's windows are always there; the debug overlay's only while it shows.
     bool HasImGuiWindows() const
     {
-        return isDebugVisible || editorLayer != nullptr;
+        return isDebugVisible || editorLayer != nullptr || (scene && scene->HasToolWindows());
     }
     // Ends the current scene, keeping what the exit checks need, and hands it back to be destroyed
     // once nothing refers to it.
