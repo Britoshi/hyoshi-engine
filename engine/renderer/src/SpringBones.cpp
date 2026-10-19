@@ -18,65 +18,88 @@ namespace
 constexpr float STEP_SECONDS = 1.0f / 60.0f;
 // Steps a Step may take, so a long frame (or a pause) doesn't run the swinging on and on.
 constexpr int32_t MAX_STEPS = 4;
+// Steps swung, the model held as it stands, as a Step starts again (Reset), so the bones are already
+// hanging as they come to rest, not swinging from where the animation points them.
+constexpr int32_t SETTLE_STEPS = 60;
+// Times a step puts a tip at its bone's length and then out of what it touches, so neither undoes the
+// other (each can move it back into the other's way).
+constexpr int32_t SOLVE_PASSES = 4;
 constexpr glm::vec3 DOWN{0.0f, -1.0f, 0.0f};
+// A bone's head this little under a seat's top counts as on it (a bone lying on the top ends a little
+// under it at its length, and a body breathing moves it up and down).
+constexpr float ON_TOP = 0.01f;
 
-// Where `tip` (as thick as `radius`, its bone from `head`, `length` long) goes out of the seat, if
-// it's in it (over it, as far as it's thick, and under its top), by the way its bone came in: through
-// the top (from over the seat, at or above its top, or crossing its edge there), onto the top at its
-// length, the same way round (straight down: toward the nearest side), so the next bone's head is no
-// lower than the top; through a side (crossing its edge under the top), out of that side.
-std::optional<glm::vec3> GetOutOfSeat(const SpringSeat& seat, glm::vec3 head, glm::vec3 tip, float length, float radius)
+// `tip` (as thick as `radius`, its bone from `head`) kept out of the seat, and its bone with it, so a
+// bone from over the seat lies on its top and over its edge, not through it. A tip in it (over it, as
+// far as it's thick, and under its top) goes out through the face the bone came in by (the last of
+// their planes it crosses from the head; with the head in the seat too, the nearest): onto the top,
+// or out of a side. A tip beyond it whose bone goes through it, from its top out of a side, is turned
+// about the head up onto the edge it goes over, resting on it.
+glm::vec3 GetOutOfSeat(const SpringSeat& seat, glm::vec3 head, glm::vec3 tip, float radius)
 {
     const glm::vec2 from = seat.From - glm::vec2(radius);
     const glm::vec2 to = seat.To + glm::vec2(radius);
     const float top = seat.Height + radius;
-    if (tip.x <= from.x || tip.x >= to.x || tip.z <= from.y || tip.z >= to.y || tip.y >= top)
+    const auto isOver = [&from, &to](glm::vec3 at)
+    { return at.x > from.x && at.x < to.x && at.z > from.y && at.z < to.y; };
+    // From over the top, or on it; and how far along the bone it comes down to the top.
+    const bool isFromTop = head.y >= top - ON_TOP;
+    const float down = head.y > top ? (top - head.y) / (tip.y - head.y) : 0.0f;
+    if (isOver(tip) && tip.y < top)
     {
-        return std::nullopt;
-    }
-    // Where along the bone it crosses the seat's edge (from beside it: x's low and high sides, then
-    // z's), and which side.
-    float crossing = 0.0f;
-    std::optional<size_t> crossed;
-    const auto cross = [&crossing, &crossed](float bone, float end, float low, float high, size_t lowSide)
-    {
-        const bool isLow = bone < low;
-        if (isLow || bone > high)
+        const std::array<float, 5> depths{top - tip.y, tip.x - from.x, to.x - tip.x, tip.z - from.y, to.y - tip.z};
+        float latest = -1.0f;
+        auto face = static_cast<size_t>(std::ranges::min_element(depths) - depths.begin());
+        const auto cross = [&latest, &face](float bone, float end, float low, float high, size_t lowFace)
         {
-            const float at = ((isLow ? low : high) - bone) / (end - bone);
-            if (at > crossing)
+            if (bone < low || bone > high)
             {
-                crossing = at;
-                crossed = isLow ? lowSide : lowSide + 1;
+                const float at = ((bone < low ? low : high) - bone) / (end - bone);
+                if (at > latest)
+                {
+                    latest = at;
+                    face = bone < low ? lowFace : lowFace + 1;
+                }
             }
+        };
+        if (isFromTop)
+        {
+            latest = down;
+            face = 0;
         }
-    };
-    cross(head.x, tip.x, from.x, to.x, 0);
-    cross(head.z, tip.z, from.y, to.y, 2);
-    const std::array<float, 4> out{tip.x - from.x, to.x - tip.x, tip.z - from.y, to.y - tip.z};
-    const auto nearest = static_cast<size_t>(std::ranges::min_element(out) - out.begin());
-    const bool isFromTop = crossed ? head.y + (crossing * (tip.y - head.y)) >= top : head.y >= seat.Height;
-    if (isFromTop)
-    {
-        constexpr std::array<glm::vec2, 4> TO_SIDE{{{-1.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, -1.0f}, {0.0f, 1.0f}}};
-        const float drop = std::clamp(head.y - top, 0.0f, length);
-        const glm::vec2 flat(tip.x - head.x, tip.z - head.z);
-        const float across = glm::length(flat);
-        const glm::vec2 way = across > 1.0e-6f ? flat / across : TO_SIDE[nearest];
-        const glm::vec2 lying = way * std::sqrt((length * length) - (drop * drop));
-        return glm::vec3(head.x + lying.x, head.y - drop, head.z + lying.y);
+        cross(head.x, tip.x, from.x, to.x, 1);
+        cross(head.z, tip.z, from.y, to.y, 3);
+        switch (face)
+        {
+        case 0:
+            return {tip.x, top, tip.z};
+        case 1:
+            return {from.x, tip.y, tip.z};
+        case 2:
+            return {to.x, tip.y, tip.z};
+        case 3:
+            return {tip.x, tip.y, from.y};
+        default:
+            return {tip.x, tip.y, to.y};
+        }
     }
-    switch (crossed.value_or(nearest))
+    if (isFromTop && tip.y < top && isOver(head + ((tip - head) * down)))
     {
-    case 0:
-        return glm::vec3(from.x, tip.y, tip.z);
-    case 1:
-        return glm::vec3(to.x, tip.y, tip.z);
-    case 2:
-        return glm::vec3(tip.x, tip.y, from.y);
-    default:
-        return glm::vec3(tip.x, tip.y, to.y);
+        // Where the bone leaves the seat's sides (under its top), and the edge over it.
+        float leaves = 1.0f;
+        const auto leave = [&leaves](float bone, float end, float low, float high)
+        {
+            if (end < low || end > high)
+            {
+                leaves = std::min(leaves, ((end < low ? low : high) - bone) / (end - bone));
+            }
+        };
+        leave(head.x, tip.x, from.x, to.x);
+        leave(head.z, tip.z, from.y, to.y);
+        const glm::vec3 out = head + ((tip - head) * leaves);
+        return head + (glm::normalize(glm::vec3(out.x, top, out.z) - head) * glm::length(tip - head));
     }
+    return tip;
 }
 
 // The turn from one direction to another (both of length 1), the shortest way.
@@ -181,34 +204,38 @@ void SpringBones::Step(const ModelData& model, std::vector<glm::mat4>& nodes, fl
     {
         return;
     }
+    animated = nodes;
     if (!isStarted)
     {
         for (Joint& joint : joints)
         {
             joint.Tip = glm::vec3(nodes[joint.Child][3]);
             joint.Before = joint.Tip;
+            joint.Last = joint.Tip;
+        }
+        for (int32_t step = 0; step < SETTLE_STEPS; ++step)
+        {
+            nodes = animated;
+            Swing(nodes, std::nullopt);
         }
         isStarted = true;
     }
     pending = std::min(pending + std::max(seconds, 0.0f), STEP_SECONDS * static_cast<float>(MAX_STEPS));
-    // Each step from the animation as it stands; between steps (a frame shorter than one), the tips
-    // stay where they are.
-    animated = nodes;
-    bool hasStepped = false;
+    // Each step from the animation as it stands.
     while (pending >= STEP_SECONDS)
     {
         pending -= STEP_SECONDS;
         nodes = animated;
-        Swing(nodes, true);
-        hasStepped = true;
+        Swing(nodes, std::nullopt);
     }
-    if (!hasStepped)
-    {
-        Swing(nodes, false);
-    }
+    // Shown between the last two steps, as far as the time since the last is toward the next, so the
+    // bones move every frame, at any frame rate, not only on frames that step (on a 120 Hz screen,
+    // every other frame: the cloth stuttering against the body as it moves).
+    nodes = animated;
+    Swing(nodes, pending / STEP_SECONDS);
 }
 
-void SpringBones::Swing(std::vector<glm::mat4>& nodes, bool isStepping)
+void SpringBones::Swing(std::vector<glm::mat4>& nodes, std::optional<float> shownAt)
 {
     for (Joint& joint : joints)
     {
@@ -221,26 +248,29 @@ void SpringBones::Swing(std::vector<glm::mat4>& nodes, bool isStepping)
         }
         const glm::vec3 aim = toTail / length;
         const SpringSettings& settings = joint.Settings;
-        if (isStepping)
+        glm::vec3 tip = shownAt ? glm::mix(joint.Last, joint.Tip, *shownAt)
+                                : joint.Tip + ((joint.Tip - joint.Before) * (1.0f - settings.Drag)) +
+                                      (aim * (settings.Stiffness * STEP_SECONDS)) +
+                                      (DOWN * (settings.Gravity * STEP_SECONDS));
+        bool isTouching = false;
+        for (int32_t pass = 0; pass < SOLVE_PASSES; ++pass)
         {
-            const glm::vec3 next = joint.Tip + ((joint.Tip - joint.Before) * (1.0f - settings.Drag)) +
-                                   (aim * (settings.Stiffness * STEP_SECONDS)) +
-                                   (DOWN * (settings.Gravity * STEP_SECONDS));
-            joint.Before = joint.Tip;
-            joint.Tip = KeepOut(nodes, next, settings.Radius);
+            const glm::vec3 toTip = tip - head;
+            const float reach = glm::length(toTip);
+            tip = head + ((reach > 1.0e-6f ? toTip / reach : aim) * length);
+            const glm::vec3 out = KeepOut(nodes, head, tip, settings.Radius);
+            isTouching = isTouching || out != tip;
+            tip = out;
         }
-        const glm::vec3 toTip = joint.Tip - head;
+        const glm::vec3 toTip = tip - head;
         const float reach = glm::length(toTip);
-        glm::vec3 pointing = reach > 1.0e-6f ? toTip / reach : aim;
-        joint.Tip = head + (pointing * length);
-        // On the seat, or out of its side.
-        if (const std::optional<glm::vec3> out =
-                seat ? GetOutOfSeat(*seat, head, joint.Tip, length, settings.Radius) : std::nullopt)
+        const glm::vec3 pointing = reach > 1.0e-6f ? toTip / reach : aim;
+        // Touching something, it stops there: cloth doesn't bounce off, or slide on with its speed.
+        if (!shownAt)
         {
-            joint.Tip = *out;
-            const glm::vec3 toOut = joint.Tip - head;
-            const float outReach = glm::length(toOut);
-            pointing = outReach > 1.0e-6f ? toOut / outReach : aim;
+            joint.Last = joint.Tip;
+            joint.Tip = head + (pointing * length);
+            joint.Before = isTouching ? joint.Tip : joint.Last;
         }
         const glm::mat4 swing = glm::translate(glm::mat4(1.0f), head) * glm::mat4_cast(TurnBetween(aim, pointing)) *
                                 glm::translate(glm::mat4(1.0f), -head);
@@ -252,7 +282,7 @@ void SpringBones::Swing(std::vector<glm::mat4>& nodes, bool isStepping)
     }
 }
 
-glm::vec3 SpringBones::KeepOut(const std::vector<glm::mat4>& nodes, glm::vec3 tip, float radius) const
+glm::vec3 SpringBones::KeepOut(const std::vector<glm::mat4>& nodes, glm::vec3 head, glm::vec3 tip, float radius) const
 {
     for (const Collider& collider : colliders)
     {
@@ -270,6 +300,10 @@ glm::vec3 SpringBones::KeepOut(const std::vector<glm::mat4>& nodes, glm::vec3 ti
         {
             tip = nearest + (away * (reach / distance));
         }
+    }
+    if (seat)
+    {
+        tip = GetOutOfSeat(*seat, head, tip, radius);
     }
     if (floor)
     {

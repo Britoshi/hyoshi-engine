@@ -5,6 +5,7 @@
 #include <doctest/doctest.h>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -375,4 +376,72 @@ TEST_CASE("SpringBones lay a chain on a seat and over its edge, and keep a bone 
     beside.Nodes[2].Translation = {-0.2121f, -0.2121f, 0.0f};
     CHECK(glm::vec3(settle(beside, {10.0f, 0.4f, 0.0f, 0.05f}, false)[2][3]).x < 0.45f);
     CHECK(glm::vec3(settle(beside, {10.0f, 0.4f, 0.0f, 0.05f}, true)[2][3]).x > 0.5f);
+}
+
+TEST_CASE("SpringBones rest a bone from a seat's top on its edge, still, and start at rest")
+{
+    // A bone of 0.1 m along x, its head on a seat's top (or a little under it, as a bone lying on it
+    // ends), the edge 4 cm out, pulled down.
+    hyoshi::renderer::ModelData model;
+    model.Nodes = {{"Root", -1}, {"Tail", 0}, {"Tip", 1}};
+    model.Nodes[2].Translation = {0.1f, 0.0f, 0.0f};
+    for (const float top : {-0.005f, 0.002f})
+    {
+        hyoshi::renderer::SpringBones springs;
+        springs.Add(model, "Tail", {0.0f, 0.4f, 10.0f});
+        springs.SetSeat(hyoshi::renderer::SpringSeat{{-1.0f, -1.0f}, {0.04f, 1.0f}, top});
+        std::vector<glm::mat4> nodes;
+        std::vector<glm::vec3> tips;
+        for (int frame = 0; frame < 120; ++frame)
+        {
+            hyoshi::renderer::PoseNodes(model, nullptr, 0.0f, nodes);
+            springs.Step(model, nodes, 1.0f / 60.0f);
+            tips.emplace_back(nodes[2][3]);
+        }
+        // Over the edge, resting on it (not hanging down beside it, nor through it), from the first
+        // frame on (it came to rest as it started), not moving.
+        CHECK(tips.back().x > 0.04f);
+        CHECK(tips.back().y > -0.02f);
+        CHECK(glm::length(tips.back()) == doctest::Approx(0.1f));
+        for (const glm::vec3& tip : tips)
+        {
+            CHECK(glm::distance(tip, tips.back()) < 1.0e-4f);
+        }
+    }
+}
+
+TEST_CASE("SpringBones move the bones every frame, between their steps, at any frame rate")
+{
+    // A bone hanging under a root that moves along x at half a meter a second, at 60 and at 144 frames
+    // a second.
+    hyoshi::renderer::ModelData model;
+    model.Nodes = {{"Root", -1}, {"Tail", 0}, {"Tip", 1}};
+    model.Nodes[2].Translation = {0.0f, -0.3f, 0.0f};
+    const auto follow = [&model](float framesASecond)
+    {
+        hyoshi::renderer::SpringBones springs;
+        springs.Add(model, "Tail", {1.0f, 0.2f, 2.0f});
+        std::vector<glm::mat4> nodes;
+        std::vector<glm::vec3> tips;
+        const auto frames = static_cast<int>(framesASecond);
+        for (int frame = 0; frame <= frames; ++frame)
+        {
+            model.Nodes[0].Translation.x = 0.5f * static_cast<float>(frame) / framesASecond;
+            hyoshi::renderer::PoseNodes(model, nullptr, 0.0f, nodes);
+            springs.Step(model, nodes, 1.0f / framesASecond);
+            tips.emplace_back(nodes[2][3]);
+        }
+        return tips;
+    };
+    const std::vector<glm::vec3> quick = follow(144.0f);
+    // Dragged along steadily, it goes on as the root does every frame, though most don't step (a step
+    // is a sixtieth of a second): not still on some and catching up on others.
+    const float each = 0.5f / 144.0f;
+    for (size_t frame = quick.size() / 2; frame < quick.size(); ++frame)
+    {
+        CHECK(std::abs(quick[frame].x - quick[frame - 1].x - each) < each * 0.2f);
+    }
+    // Where it is after the second, as at 60 frames a second, near enough.
+    CHECK(glm::distance(quick.back(), follow(60.0f).back()) < 0.01f);
+    model.Nodes[0].Translation = glm::vec3(0.0f);
 }
