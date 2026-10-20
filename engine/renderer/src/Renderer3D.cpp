@@ -15,7 +15,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <string>
+#include <unordered_map>
 
 namespace hyoshi::renderer
 {
@@ -57,6 +59,50 @@ static_assert(sizeof(SkinVertex) == 12, "A skinned vertex's joints and weights a
 // may; and the least the joints' buffer is made (it grows to fit).
 constexpr size_t JOINT_ROW_ALIGNMENT = rhi::STORAGE_BUFFER_ALIGNMENT / sizeof(glm::vec4);
 constexpr size_t LEAST_JOINT_BUFFER = 64 * 1024;
+// A draw's lights at points (Mesh.slang's pointLights): a row for how many and its lighting's grade,
+// then two a light, in a block a storage buffer's range may start on; the least their buffer is made.
+constexpr size_t LIGHT_BLOCK_ROWS = rhi::STORAGE_BUFFER_ALIGNMENT / sizeof(glm::vec4);
+static_assert(1 + (Renderer3D::MAX_POINT_LIGHTS * 2) <= LIGHT_BLOCK_ROWS, "A draw's lights fit in a block");
+constexpr size_t LEAST_LIGHT_BUFFER = 64 * 1024;
+
+// sRGB to linear light, as Mesh.slang's ToLinear.
+glm::vec3 ToLinear(Color color)
+{
+    const auto channel = [](uint8_t value) { return std::pow(static_cast<float>(value) / 255.0f, 2.2f); };
+    return {channel(color.R), channel(color.G), channel(color.B)};
+}
+
+// What a draw's lights depend on: where its object is, and its lighting.
+struct LightKey
+{
+    glm::mat4 Transform{1.0f};
+    size_t Slot = 0;
+
+    bool operator==(const LightKey& other) const
+    {
+        return Slot == other.Slot && std::memcmp(&Transform, &other.Transform, sizeof(Transform)) == 0;
+    }
+};
+
+struct LightKeyHash
+{
+    size_t operator()(const LightKey& key) const
+    {
+        // FNV-1a over the transform's bytes and the slot.
+        uint64_t hash = 14695981039346656037ULL;
+        const auto mix = [&hash](const void* data, size_t size)
+        {
+            const auto* bytes = static_cast<const uint8_t*>(data);
+            for (size_t i = 0; i < size; ++i)
+            {
+                hash = (hash ^ bytes[i]) * 1099511628211ULL;
+            }
+        };
+        mix(&key.Transform, sizeof(key.Transform));
+        mix(&key.Slot, sizeof(key.Slot));
+        return static_cast<size_t>(hash);
+    }
+};
 
 uint32_t PackFog(Color fog, float density)
 {
@@ -111,12 +157,14 @@ Result<void> Renderer3D::Initialize(rhi::IRenderDevice& renderDevice)
                 {2, 0, rhi::VertexFormat::Float2, static_cast<uint32_t>(offsetof(MeshVertex, Uv))},
                 {3, 0, rhi::VertexFormat::UByte4Norm, static_cast<uint32_t>(offsetof(MeshVertex, Color))},
             };
+            // The draw's lights at points from a storage buffer.
+            desc.StorageBufferCount = 1;
             if (isSkinned)
             {
-                // Each vertex's joints and weights from a second stream, the joints from a storage
-                // buffer.
+                // Each vertex's joints and weights from a second stream, the joints from a second
+                // storage buffer.
                 desc.VertexEntry = "vertexSkinned";
-                desc.StorageBufferCount = 1;
+                desc.StorageBufferCount = 2;
                 desc.VertexBindings.push_back({1, sizeof(SkinVertex), rhi::VertexInputRate::Vertex});
                 desc.VertexAttributes.push_back(
                     {4, 1, rhi::VertexFormat::UShort4, static_cast<uint32_t>(offsetof(SkinVertex, Joints))});
@@ -224,6 +272,17 @@ void Renderer3D::Shutdown()
     }
     jointRows.clear();
     jointSets.clear();
+    for (size_t frame = 0; frame < lightBuffers.size(); ++frame)
+    {
+        if (lightBuffers[frame].IsValid())
+        {
+            device->Destroy(lightBuffers[frame]);
+        }
+        lightBuffers[frame] = {};
+        lightBufferSizes[frame] = 0;
+    }
+    pointLights.clear();
+    lightRows.clear();
     if (sampler.IsValid())
     {
         device->Destroy(sampler);
@@ -434,6 +493,14 @@ void Renderer3D::Destroy(MeshHandle mesh)
     }
 }
 
+void Renderer3D::AddPointLight(const PointLight& light)
+{
+    if (isAvailable && light.Range > 0.0f && light.Intensity > 0.0f)
+    {
+        pointLights.push_back(light);
+    }
+}
+
 JointSet Renderer3D::AddJoints(std::span<const glm::mat4> joints)
 {
     if (!isAvailable || joints.empty())
@@ -486,6 +553,7 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
         draws.clear();
         jointRows.clear();
         jointSets.clear();
+        pointLights.clear();
         return;
     }
 
@@ -549,9 +617,97 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
             }
         }
     }
-    size_t boundPipeline = PIPELINE_COUNT * 2;
-    for (const DrawItem& item : draws)
+    // Each lighting's lights at points, the brightest first, at most MAX_POINT_LIGHTS of them; then
+    // each draw's block of them, moved into its object's space (where its normals are) with its
+    // lighting's grade, shared by draws placed alike (and by all of a lighting's with none).
+    std::ranges::stable_sort(pointLights,
+                             [](const PointLight& a, const PointLight& b) { return a.Intensity > b.Intensity; });
+    std::array<std::vector<const PointLight*>, LIGHTING_SLOTS> slotLights;
+    for (const PointLight& light : pointLights)
     {
+        for (size_t slot = 0; slot < LIGHTING_SLOTS; ++slot)
+        {
+            if ((light.Slots & (1U << slot)) != 0 && slotLights[slot].size() < MAX_POINT_LIGHTS)
+            {
+                slotLights[slot].push_back(&light);
+            }
+        }
+    }
+    lightRows.clear();
+    std::unordered_map<LightKey, size_t, LightKeyHash> blocks;
+    std::vector<size_t> drawBlocks(draws.size(), 0);
+    for (size_t i = 0; i < draws.size(); ++i)
+    {
+        const size_t slot = std::min<size_t>(draws[i].Surface.LightingSlot, LIGHTING_SLOTS - 1);
+        const LightKey key{slotLights[slot].empty() ? glm::mat4(1.0f) : draws[i].Transform, slot};
+        if (const auto found = blocks.find(key); found != blocks.end())
+        {
+            drawBlocks[i] = found->second;
+            continue;
+        }
+        const size_t first = lightRows.size();
+        lightRows.resize(first + LIGHT_BLOCK_ROWS, glm::vec4(0.0f));
+        const Lighting& lighting = lightings[slot];
+        const bool isGraded = lighting.Exposure != 1.0f || lighting.Saturation != 1.0f;
+        lightRows[first] = {static_cast<float>(slotLights[slot].size()), lighting.Saturation, lighting.Exposure,
+                            isGraded ? 1.0f : 0.0f};
+        const glm::mat4 objectFromWorld = glm::inverse(key.Transform);
+        // Sized alike on each axis (Draw's), so a distance in the world is this much in the object.
+        const float scale = glm::length(glm::vec3(objectFromWorld[0]));
+        for (size_t light = 0; light < slotLights[slot].size(); ++light)
+        {
+            const PointLight& point = *slotLights[slot][light];
+            lightRows[first + 1 + (light * 2)] =
+                glm::vec4(glm::vec3(objectFromWorld * glm::vec4(point.Position, 1.0f)), point.Range * scale);
+            lightRows[first + 2 + (light * 2)] = glm::vec4(ToLinear(point.Light) * point.Intensity, 0.0f);
+        }
+        blocks.emplace(key, first);
+        drawBlocks[i] = first;
+    }
+    rhi::BufferHandle lights;
+    if (const size_t bytes = lightRows.size() * sizeof(glm::vec4); bytes > 0)
+    {
+        if (lightBufferSizes[frame] < bytes)
+        {
+            if (lightBuffers[frame].IsValid())
+            {
+                device->Destroy(lightBuffers[frame]);
+            }
+            rhi::BufferDesc desc;
+            desc.Size = std::max(bytes * 2, LEAST_LIGHT_BUFFER);
+            desc.Usage = rhi::BufferUsage::Storage;
+            desc.Memory = rhi::MemoryUsage::CpuToGpu;
+            desc.DebugName = "3D lights";
+            Result<rhi::BufferHandle> made = device->CreateBuffer(desc);
+            lightBuffers[frame] = made ? made.Value() : rhi::BufferHandle{};
+            lightBufferSizes[frame] = made ? desc.Size : 0;
+            if (!made)
+            {
+                HYOSHI_LOG_ERROR("3D: lights: {}", made.GetError().Message);
+            }
+        }
+        if (lightBuffers[frame].IsValid())
+        {
+            if (Result<void> uploaded = device->UploadBuffer(lightBuffers[frame], lightRows.data(), bytes, 0); uploaded)
+            {
+                lights = lightBuffers[frame];
+            }
+        }
+    }
+    // Every pipeline reads its draw's lights: without them, nothing can be drawn.
+    if (!lights.IsValid())
+    {
+        draws.clear();
+        jointRows.clear();
+        jointSets.clear();
+        pointLights.clear();
+        return;
+    }
+
+    size_t boundPipeline = PIPELINE_COUNT * 2;
+    for (size_t index = 0; index < draws.size(); ++index)
+    {
+        const DrawItem& item = draws[index];
         GpuMesh* mesh = meshes.Get(item.Mesh);
         if (mesh == nullptr)
         {
@@ -582,11 +738,13 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
         }
         commands.BindTexture(0, item.Surface.Texture.IsValid() ? item.Surface.Texture : whiteTexture, sampler);
         commands.BindVertexBuffer(0, vertices, 0);
+        commands.BindStorageBuffer(0, lights, drawBlocks[index] * sizeof(glm::vec4),
+                                   LIGHT_BLOCK_ROWS * sizeof(glm::vec4));
         if (isSkinned)
         {
             const auto [firstRow, rows] = jointSets[item.Joints.Index];
             commands.BindVertexBuffer(1, mesh->Skin, 0);
-            commands.BindStorageBuffer(0, joints, firstRow * sizeof(glm::vec4), rows * sizeof(glm::vec4));
+            commands.BindStorageBuffer(1, joints, firstRow * sizeof(glm::vec4), rows * sizeof(glm::vec4));
         }
         commands.BindIndexBuffer(mesh->Indices, 0, rhi::IndexType::UInt32);
 
@@ -615,6 +773,7 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
     draws.clear();
     jointRows.clear();
     jointSets.clear();
+    pointLights.clear();
 }
 
 } // namespace hyoshi::renderer

@@ -81,6 +81,26 @@ struct Lighting
     // How fast fog thickens with distance: the share of light lost is 1 - e^(-density x distance).
     // From 0 to 1 per unit, in steps of 1/255.
     float FogDensity = 0.0f;
+    // A grade on what it lights, last: brighter (Exposure, times), and richer or greyer (Saturation,
+    // 1 as it is, 0 grey). Graded, colours past white roll off instead of clipping.
+    float Exposure = 1.0f;
+    float Saturation = 1.0f;
+};
+
+// A light at a point (a candle, a lamp, a fire) as well as the lighting's own: brightest at it,
+// falling off as light does (with the square of the distance from a metre's softness, so world
+// units are metres) and to nothing `Range` away, on whatever faces it (and a little on what
+// doesn't, as light wraps round in a room). Each frame's (Renderer3D::AddPointLight).
+struct PointLight
+{
+    glm::vec3 Position{0.0f};
+    float Range = 2.0f;
+    Color Light{255, 190, 120, 255};
+    // 1 lights a white surface facing it, close by, as bright as its color (half that a metre away).
+    float Intensity = 1.0f;
+    // Which lightings it adds to (Material::LightingSlot), a bit each: a candle lights the room, not
+    // the night outside.
+    uint8_t Slots = 0xFF;
 };
 
 // Draws meshes in 3D (decision 0003), before the 2D, which draws over them. A scene makes its meshes
@@ -132,6 +152,11 @@ public:
             lightings[slot] = newLighting;
         }
     }
+
+    // Lights at points this frame, forgotten after it: each lighting is lit by the brightest
+    // MAX_POINT_LIGHTS of those for it. None where there's no 3D (nor on the web).
+    static constexpr size_t MAX_POINT_LIGHTS = 7;
+    void AddPointLight(const PointLight& light);
 
     // Joints to draw skinned meshes with this frame (PoseJoints's: each joint's node transform times
     // its inverse bind), forgotten after it; none where there's no 3D. One set serves every part of
@@ -197,6 +222,13 @@ private:
     std::vector<std::pair<size_t, size_t>> jointSets;
     std::array<rhi::BufferHandle, rhi::MAX_FRAMES_IN_FLIGHT> jointBuffers{};
     std::array<size_t, rhi::MAX_FRAMES_IN_FLIGHT> jointBufferSizes{};
+    // This frame's lights at points (AddPointLight); each draw's (in its object's space, with its
+    // lighting's grade: Mesh.slang's pointLights), a block each, shared by draws placed alike; and
+    // the buffer they go up in, for each frame in flight, with its size.
+    std::vector<PointLight> pointLights;
+    std::vector<glm::vec4> lightRows;
+    std::array<rhi::BufferHandle, rhi::MAX_FRAMES_IN_FLIGHT> lightBuffers{};
+    std::array<size_t, rhi::MAX_FRAMES_IN_FLIGHT> lightBufferSizes{};
 };
 
 } // namespace hyoshi::renderer

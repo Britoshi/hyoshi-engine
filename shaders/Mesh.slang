@@ -4,7 +4,8 @@
 // done in linear light and written back as sRGB, since the swapchain takes colors as they are.
 // Everything per draw fits the 128 bytes of push constants every device has (Renderer3D.cpp).
 // A skinned mesh (vertexSkinned) is moved by its joints here, on the GPU: the CPU sends the joints
-// each frame, not the vertices.
+// each frame, not the vertices. Lights at points (a candle, a fire) add to the light, and the
+// lighting's grade comes last (pointLights).
 
 struct MeshConstants
 {
@@ -37,9 +38,14 @@ Sampler2D baseTexture;
 
 // Not on the web, which has no 3D yet.
 #if !defined(HYOSHI_WGSL)
+// This draw's lights at points (Renderer3D::AddPointLight), in its object's space: the first row's
+// x how many, y and z its lighting's saturation and exposure, w 1 if it's graded; then two rows
+// each, where it is (w: how far it reaches) and its light, linear, by its brightness.
+[[vk::binding(1, 0)]]
+StructuredBuffer<float4> pointLights;
 // A skinned mesh's joints this frame (Renderer3D::AddJoints): each joint's matrix as three rows
 // (the fourth, 0 0 0 1, left out).
-[[vk::binding(1, 0)]]
+[[vk::binding(2, 0)]]
 StructuredBuffer<float4> jointRows;
 #endif
 
@@ -51,6 +57,12 @@ static const float TOON_EDGE = 0.12;
 static const float TOON_SOFTNESS = 0.04;
 static const float3 TOON_SHADE = float3(0.78, 0.7, 0.9);
 static const float TOON_RIM_EDGE = 0.62;
+// A light at a point also lights what faces away from it this much (light wraps round in a room);
+// as a cartoon, its pool's edge as soft as this.
+static const float POINT_WRAP = 0.35;
+static const float TOON_POINT_SOFTNESS = 0.25;
+// Graded, colours roll off from this toward white instead of clipping.
+static const float SHOULDER = 0.8;
 
 struct VertexInput
 {
@@ -98,6 +110,17 @@ float3 ToLinear(float3 color)
 float3 ToSrgb(float3 color)
 {
     return pow(max(color, float3(0.0)), float3(1.0 / 2.2));
+}
+
+// Brighter by `exposure`, richer or greyer by `saturation` (about its luminance), and past SHOULDER
+// rolling off toward white.
+float3 Grade(float3 color, float saturation, float exposure)
+{
+    color *= exposure;
+    float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
+    color = max(lerp(float3(luminance), color, saturation), float3(0.0));
+    float3 over = max(color - float3(SHOULDER), float3(0.0));
+    return min(color, float3(SHOULDER)) + over / (float3(1.0) + over / (1.0 - SHOULDER));
 }
 
 VertexOutput Place(float3 position, float3 normal, float2 uv, float4 color)
@@ -177,9 +200,35 @@ float4 fragmentMain(VertexOutput input, bool isFrontFace: SV_IsFrontFace) : SV_T
     float rimBand = smoothstep(TOON_RIM_EDGE - TOON_SOFTNESS, TOON_RIM_EDGE + TOON_SOFTNESS, edge) * 0.5;
     float rim = constants.cameraPosition.w * lerp(pow(edge, 3.0), rimBand, toon);
     float3 lit = albedo * (ambient * shade + light * diffuse) + light * rim;
+#if !defined(HYOSHI_WGSL)
+    // Each light at a point, falling off as light does (with the square of the distance, in
+    // metres, from a metre's softness) and windowed to nothing at its reach; as a cartoon, its
+    // pool's edge softened into a band.
+    float4 grade = pointLights[0];
+    uint count = uint(grade.x);
+    for (uint i = 0u; i < count; ++i)
+    {
+        float4 place = pointLights[1u + i * 2u];
+        float3 glow = pointLights[2u + i * 2u].rgb;
+        float3 toPoint = place.xyz - input.objectPosition;
+        float distance = length(toPoint);
+        float near = distance / max(place.w, 1.0e-4);
+        float window = saturate(1.0 - near * near * near * near);
+        float falloff = window * window / (1.0 + distance * distance);
+        float wrap = saturate((dot(normal, toPoint / max(distance, 1.0e-4)) + POINT_WRAP) / (1.0 + POINT_WRAP));
+        float toonWrap = smoothstep(0.5 - TOON_POINT_SOFTNESS, 0.5 + TOON_POINT_SOFTNESS, wrap) * 0.85 + 0.15;
+        lit += albedo * glow * falloff * lerp(wrap, toonWrap, toon);
+    }
+#endif
     float3 color = lerp(lit, albedo, constants.lightDirection.w);
 
     float fogAmount = 1.0 - exp(-input.viewDepth * fog.a * FOG_DENSITY_SCALE);
     color = lerp(color, ToLinear(fog.rgb), fogAmount);
+#if !defined(HYOSHI_WGSL)
+    if (grade.w > 0.5)
+    {
+        color = Grade(color, grade.y, grade.z);
+    }
+#endif
     return float4(ToSrgb(color), base.a);
 }
