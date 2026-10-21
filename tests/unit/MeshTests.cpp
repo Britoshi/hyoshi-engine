@@ -5,6 +5,7 @@
 #include <glm/mat4x4.hpp>
 
 #include <cstddef>
+#include <span>
 #include <vector>
 
 namespace
@@ -95,4 +96,32 @@ TEST_CASE("SliceMesh blends the points it adds")
     }
     CHECK(hasHalfway);
     CHECK(GetArea(slabs[0]) + GetArea(slabs[1]) == doctest::Approx(0.5f));
+}
+
+TEST_CASE("WithLightUvs splits a vertex only where its corners lie apart in the lightmap")
+{
+    // Two triangles sharing an edge: its two vertices shared, one in the same place in the lightmap
+    // for both triangles and one not.
+    MeshData quad;
+    quad.Vertices.resize(4);
+    for (size_t i = 0; i < 4; ++i)
+    {
+        quad.Vertices[i].Position = glm::vec3(static_cast<float>(i), 0.0f, 0.0f);
+    }
+    quad.Indices = {0, 1, 2, 2, 1, 3};
+    const std::vector<glm::vec2> corners{{0.0f, 0.0f}, {0.5f, 0.0f}, {0.0f, 0.5f},
+                                         {0.0f, 0.5f}, {0.9f, 0.9f}, {0.5f, 0.5f}};
+    const MeshData lit = hyoshi::renderer::WithLightUvs(quad, corners);
+    REQUIRE(lit.Indices.size() == 6);
+    // Vertex 1 is in two places (0.5, 0) and (0.9, 0.9); vertex 2 in one.
+    CHECK(lit.Vertices.size() == 5);
+    for (size_t i = 0; i < 6; ++i)
+    {
+        CHECK(lit.Vertices[lit.Indices[i]].Position == quad.Vertices[quad.Indices[i]].Position);
+        CHECK(lit.Vertices[lit.Indices[i]].LightUv == corners[i]);
+    }
+    CHECK(lit.Indices[2] == lit.Indices[3]);
+    CHECK(lit.Indices[1] != lit.Indices[4]);
+    // Not one for each index: nothing.
+    CHECK(hyoshi::renderer::WithLightUvs(quad, std::span(corners).first(5)).Vertices.empty());
 }

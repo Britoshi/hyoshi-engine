@@ -466,7 +466,10 @@ Result<VkDescriptorSetLayout> VulkanRenderDevice::GetSetLayout(uint32_t textureC
         bindings[binding].descriptorType =
             isTexture ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[binding].descriptorCount = 1;
-        bindings[binding].stageFlags = isTexture ? VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_VERTEX_BIT;
+        // A storage buffer is read where it's needed: a skinned mesh's joints by its vertices, a mesh's
+        // lights by its fragments.
+        bindings[binding].stageFlags =
+            isTexture ? VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     }
 
     VkDescriptorSetLayoutCreateInfo createInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};

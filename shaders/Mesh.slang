@@ -5,7 +5,8 @@
 // Everything per draw fits the 128 bytes of push constants every device has (Renderer3D.cpp).
 // A skinned mesh (vertexSkinned) is moved by its joints here, on the GPU: the CPU sends the joints
 // each frame, not the vertices. Lights at points (a candle, a fire) add to the light, and the
-// lighting's grade comes last (pointLights).
+// lighting's grade comes last (pointLights). Where light was baked (lightmaps: ray traced offline),
+// it lights the surface instead, for a texture's look-up or two.
 
 struct MeshConstants
 {
@@ -38,14 +39,21 @@ Sampler2D baseTexture;
 
 // Not on the web, which has no 3D yet.
 #if !defined(HYOSHI_WGSL)
-// This draw's lights at points (Renderer3D::AddPointLight), in its object's space: the first row's
-// x how many, y and z its lighting's saturation and exposure, w 1 if it's graded; then two rows
-// each, where it is (w: how far it reaches) and its light, linear, by its brightness.
+// Its light baked (Material::Lightmaps), at the vertices' lightUv: two groups, each the light's
+// square root in its color, its alpha where it's baked (none: 0 everywhere).
 [[vk::binding(1, 0)]]
+Sampler2D lightmap0;
+[[vk::binding(2, 0)]]
+Sampler2D lightmap1;
+// This draw's lights at points (Renderer3D::AddPointLight), in its object's space: the first row's
+// x how many, y and z its lighting's saturation and exposure, w 1 if it's graded; the second's x and
+// y how bright each lightmap lights; then two rows each, where it is (w: how far it reaches) and its
+// light, linear, by its brightness.
+[[vk::binding(3, 0)]]
 StructuredBuffer<float4> pointLights;
 // A skinned mesh's joints this frame (Renderer3D::AddJoints): each joint's matrix as three rows
 // (the fourth, 0 0 0 1, left out).
-[[vk::binding(2, 0)]]
+[[vk::binding(4, 0)]]
 StructuredBuffer<float4> jointRows;
 #endif
 
@@ -70,6 +78,7 @@ struct VertexInput
     [[vk::location(1)]] float3 normal;
     [[vk::location(2)]] float2 uv;
     [[vk::location(3)]] float4 color;
+    [[vk::location(6)]] float2 lightUv;
 };
 
 // And the joints a skinned vertex moves with (up to four), and how much each moves it (summing to
@@ -82,6 +91,7 @@ struct SkinnedInput
     [[vk::location(3)]] float4 color;
     [[vk::location(4)]] uint4 joints;
     [[vk::location(5)]] float4 weights;
+    [[vk::location(6)]] float2 lightUv;
 };
 
 struct VertexOutput
@@ -93,6 +103,7 @@ struct VertexOutput
     float4 color : COLOR0;
     // The distance along the view, for fog (clip space's w).
     float viewDepth : TEXCOORD3;
+    float2 lightUv : TEXCOORD4;
 };
 
 float4 Unpack(uint packed)
@@ -123,7 +134,7 @@ float3 Grade(float3 color, float saturation, float exposure)
     return min(color, float3(SHOULDER)) + over / (float3(1.0) + over / (1.0 - SHOULDER));
 }
 
-VertexOutput Place(float3 position, float3 normal, float2 uv, float4 color)
+VertexOutput Place(float3 position, float3 normal, float2 uv, float4 color, float2 lightUv)
 {
     VertexOutput output;
     output.position = constants.clip0 * position.x + constants.clip1 * position.y + constants.clip2 * position.z +
@@ -133,13 +144,14 @@ VertexOutput Place(float3 position, float3 normal, float2 uv, float4 color)
     output.uv = uv;
     output.color = color;
     output.viewDepth = output.position.w;
+    output.lightUv = lightUv;
     return output;
 }
 
 [shader("vertex")]
 VertexOutput vertexMain(VertexInput input)
 {
-    return Place(input.position, input.normal, input.uv, input.color);
+    return Place(input.position, input.normal, input.uv, input.color, input.lightUv);
 }
 
 #if !defined(HYOSHI_WGSL)
@@ -151,7 +163,7 @@ VertexOutput vertexSkinned(SkinnedInput input)
     float total = dot(input.weights, float4(1.0));
     if (total <= 0.0)
     {
-        return Place(input.position, input.normal, input.uv, input.color);
+        return Place(input.position, input.normal, input.uv, input.color, input.lightUv);
     }
     float4 row0 = float4(0.0);
     float4 row1 = float4(0.0);
@@ -171,7 +183,7 @@ VertexOutput vertexSkinned(SkinnedInput input)
     float3 normal = float3(dot(row0.xyz, input.normal), dot(row1.xyz, input.normal), dot(row2.xyz, input.normal));
     float length = sqrt(dot(normal, normal));
     return Place(float3(dot(row0, position), dot(row1, position), dot(row2, position)),
-                 length > 0.0 ? normal / length : input.normal, input.uv, input.color);
+                 length > 0.0 ? normal / length : input.normal, input.uv, input.color, input.lightUv);
 }
 #endif
 
@@ -201,15 +213,25 @@ float4 fragmentMain(VertexOutput input, bool isFrontFace: SV_IsFrontFace) : SV_T
     float rim = constants.cameraPosition.w * lerp(pow(edge, 3.0), rimBand, toon);
     float3 lit = albedo * (ambient * shade + light * diffuse) + light * rim;
 #if !defined(HYOSHI_WGSL)
+    float4 grade = pointLights[0];
+    // Baked: its light the lightmaps', each as bright as the lighting has it (and its rim, which the
+    // light that baked it had none of).
+    float4 baked0 = lightmap0.Sample(input.lightUv);
+    uint count = uint(grade.x);
+    if (baked0.a > 0.5)
+    {
+        float2 weights = pointLights[1].xy;
+        float3 baked1 = lightmap1.Sample(input.lightUv).rgb;
+        lit = albedo * (baked0.rgb * baked0.rgb * weights.x + baked1 * baked1 * weights.y) + light * rim;
+        count = 0u;
+    }
     // Each light at a point, falling off as light does (with the square of the distance, in
     // metres, from a metre's softness) and windowed to nothing at its reach; as a cartoon, its
     // pool's edge softened into a band.
-    float4 grade = pointLights[0];
-    uint count = uint(grade.x);
     for (uint i = 0u; i < count; ++i)
     {
-        float4 place = pointLights[1u + i * 2u];
-        float3 glow = pointLights[2u + i * 2u].rgb;
+        float4 place = pointLights[2u + i * 2u];
+        float3 glow = pointLights[3u + i * 2u].rgb;
         float3 toPoint = place.xyz - input.objectPosition;
         float distance = length(toPoint);
         float near = distance / max(place.w, 1.0e-4);

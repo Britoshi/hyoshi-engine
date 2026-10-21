@@ -62,7 +62,10 @@ constexpr size_t LEAST_JOINT_BUFFER = 64 * 1024;
 // A draw's lights at points (Mesh.slang's pointLights): a row for how many and its lighting's grade,
 // then two a light, in a block a storage buffer's range may start on; the least their buffer is made.
 constexpr size_t LIGHT_BLOCK_ROWS = rhi::STORAGE_BUFFER_ALIGNMENT / sizeof(glm::vec4);
-static_assert(1 + (Renderer3D::MAX_POINT_LIGHTS * 2) <= LIGHT_BLOCK_ROWS, "A draw's lights fit in a block");
+// Its grade's row, its lightmaps' weights' row, and two rows for each light.
+constexpr size_t LIGHT_BLOCK_HEAD = 2;
+static_assert(LIGHT_BLOCK_HEAD + (Renderer3D::MAX_POINT_LIGHTS * 2) <= LIGHT_BLOCK_ROWS,
+              "A draw's lights fit in a block");
 constexpr size_t LEAST_LIGHT_BUFFER = 64 * 1024;
 
 // sRGB to linear light, as Mesh.slang's ToLinear.
@@ -149,13 +152,15 @@ Result<void> Renderer3D::Initialize(rhi::IRenderDevice& renderDevice)
             rhi::PipelineDesc desc;
             desc.Spirv = MESH_SPIRV;
             desc.PushConstantSize = sizeof(MeshConstants);
-            desc.TextureCount = 1;
+            // Its texture and its two lightmaps.
+            desc.TextureCount = 3;
             desc.VertexBindings = {{0, sizeof(MeshVertex), rhi::VertexInputRate::Vertex}};
             desc.VertexAttributes = {
                 {0, 0, rhi::VertexFormat::Float3, static_cast<uint32_t>(offsetof(MeshVertex, Position))},
                 {1, 0, rhi::VertexFormat::Float3, static_cast<uint32_t>(offsetof(MeshVertex, Normal))},
                 {2, 0, rhi::VertexFormat::Float2, static_cast<uint32_t>(offsetof(MeshVertex, Uv))},
                 {3, 0, rhi::VertexFormat::UByte4Norm, static_cast<uint32_t>(offsetof(MeshVertex, Color))},
+                {6, 0, rhi::VertexFormat::Float2, static_cast<uint32_t>(offsetof(MeshVertex, LightUv))},
             };
             // The draw's lights at points from a storage buffer.
             desc.StorageBufferCount = 1;
@@ -214,6 +219,15 @@ Result<void> Renderer3D::Initialize(rhi::IRenderDevice& renderDevice)
         return createdSampler.GetError();
     }
     sampler = createdSampler.Value();
+    rhi::SamplerDesc lightmapDesc;
+    lightmapDesc.MinMagFilter = rhi::Filter::Linear;
+    lightmapDesc.Address = rhi::AddressMode::ClampToEdge;
+    Result<rhi::SamplerHandle> createdLightmapSampler = device->CreateSampler(lightmapDesc);
+    if (!createdLightmapSampler)
+    {
+        return createdLightmapSampler.GetError();
+    }
+    lightmapSampler = createdLightmapSampler.Value();
 
     rhi::TextureDesc whiteDesc;
     whiteDesc.Width = 1;
@@ -227,6 +241,18 @@ Result<void> Renderer3D::Initialize(rhi::IRenderDevice& renderDevice)
     whiteTexture = white.Value();
     constexpr uint32_t WHITE_PIXEL = 0xFFFFFFFF;
     if (Result<void> result = device->UpdateTexture(whiteTexture, &WHITE_PIXEL, 0, 0, 1, 1); !result)
+    {
+        return result;
+    }
+    whiteDesc.DebugName = "3D unbaked";
+    Result<rhi::TextureHandle> unbaked = device->CreateTexture(whiteDesc);
+    if (!unbaked)
+    {
+        return unbaked.GetError();
+    }
+    unbakedTexture = unbaked.Value();
+    constexpr uint32_t UNBAKED_PIXEL = 0;
+    if (Result<void> result = device->UpdateTexture(unbakedTexture, &UNBAKED_PIXEL, 0, 0, 1, 1); !result)
     {
         return result;
     }
@@ -285,15 +311,21 @@ void Renderer3D::Shutdown()
     }
     pointLights.clear();
     lightRows.clear();
-    if (sampler.IsValid())
+    for (rhi::SamplerHandle* made : {&sampler, &lightmapSampler})
     {
-        device->Destroy(sampler);
-        sampler = {};
+        if (made->IsValid())
+        {
+            device->Destroy(*made);
+            *made = {};
+        }
     }
-    if (whiteTexture.IsValid())
+    for (rhi::TextureHandle* made : {&whiteTexture, &unbakedTexture})
     {
-        device->Destroy(whiteTexture);
-        whiteTexture = {};
+        if (made->IsValid())
+        {
+            device->Destroy(*made);
+            *made = {};
+        }
     }
     draws.clear();
     isAvailable = false;
@@ -533,6 +565,17 @@ void Renderer3D::Draw(MeshHandle mesh, const glm::mat4& transform, const Materia
     }
 }
 
+std::vector<Renderer3D::Drawn> Renderer3D::GetDrawn() const
+{
+    std::vector<Drawn> drawn;
+    drawn.reserve(draws.size());
+    for (const DrawItem& item : draws)
+    {
+        drawn.push_back({item.Mesh, item.Transform, item.Surface, item.Joints.IsValid()});
+    }
+    return drawn;
+}
+
 size_t Renderer3D::GetPipelineIndex(const Material& material)
 {
     switch (material.Blend)
@@ -653,15 +696,17 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
         const bool isGraded = lighting.Exposure != 1.0f || lighting.Saturation != 1.0f;
         lightRows[first] = {static_cast<float>(slotLights[slot].size()), lighting.Saturation, lighting.Exposure,
                             isGraded ? 1.0f : 0.0f};
+        lightRows[first + 1] = {lighting.LightmapWeights[0], lighting.LightmapWeights[1], 0.0f, 0.0f};
         const glm::mat4 objectFromWorld = glm::inverse(key.Transform);
         // Sized alike on each axis (Draw's), so a distance in the world is this much in the object.
         const float scale = glm::length(glm::vec3(objectFromWorld[0]));
         for (size_t light = 0; light < slotLights[slot].size(); ++light)
         {
             const PointLight& point = *slotLights[slot][light];
-            lightRows[first + 1 + (light * 2)] =
+            lightRows[first + LIGHT_BLOCK_HEAD + (light * 2)] =
                 glm::vec4(glm::vec3(objectFromWorld * glm::vec4(point.Position, 1.0f)), point.Range * scale);
-            lightRows[first + 2 + (light * 2)] = glm::vec4(ToLinear(point.Light) * point.Intensity, 0.0f);
+            lightRows[first + LIGHT_BLOCK_HEAD + 1 + (light * 2)] =
+                glm::vec4(ToLinear(point.Light) * point.Intensity, 0.0f);
         }
         blocks.emplace(key, first);
         drawBlocks[i] = first;
@@ -739,6 +784,11 @@ void Renderer3D::Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent
             boundPipeline = bound;
         }
         commands.BindTexture(0, item.Surface.Texture.IsValid() ? item.Surface.Texture : whiteTexture, sampler);
+        for (uint32_t map = 0; map < 2; ++map)
+        {
+            const rhi::TextureHandle lightmap = item.Surface.Lightmaps[map];
+            commands.BindTexture(1 + map, lightmap.IsValid() ? lightmap : unbakedTexture, lightmapSampler);
+        }
         commands.BindVertexBuffer(0, vertices, 0);
         commands.BindStorageBuffer(0, lights, drawBlocks[index] * sizeof(glm::vec4),
                                    LIGHT_BLOCK_ROWS * sizeof(glm::vec4));

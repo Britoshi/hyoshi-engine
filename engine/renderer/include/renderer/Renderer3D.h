@@ -11,6 +11,7 @@
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -66,6 +67,12 @@ struct Material
     // Which of the scene's lightings lights it (Renderer3D::SetLighting): a room by candlelight and
     // the night outside its window, say.
     uint8_t LightingSlot = 0;
+    // Light baked into textures (a light bake, ray traced offline), two groups of it its lighting
+    // dims or flickers apart (Lighting::LightmapWeights), at the mesh's MeshVertex::LightUv: each
+    // RGBA8, the light's square root in its color (so the dark keeps its steps), its alpha where it's
+    // baked. Where they're baked they light it instead of the lighting's light, ambient, and lights at
+    // points (only its rim stays); none, or where they aren't, it's lit as it would be. Not on the web.
+    std::array<rhi::TextureHandle, 2> Lightmaps{};
 };
 
 // A light: one, from a direction, with an ambient that runs from the ground's color (on
@@ -85,6 +92,10 @@ struct Lighting
     // 1 as it is, 0 grey). Graded, colours past white roll off instead of clipping.
     float Exposure = 1.0f;
     float Saturation = 1.0f;
+    // How bright each of the lightmaps lights (Material::Lightmaps): 1 as it was baked (times its
+    // light's range, if it was baked scaled down to fit), less to dim it, a little more or less each
+    // frame to flicker it.
+    std::array<float, 2> LightmapWeights{1.0f, 1.0f};
 };
 
 // A light at a point (a candle, a lamp, a fire) as well as the lighting's own: brightest at it,
@@ -167,6 +178,25 @@ public:
     // axis keep the lighting right); a skinned mesh moved by `joints` (without, as it rests).
     void Draw(MeshHandle mesh, const glm::mat4& transform, const Material& material, JointSet joints = {});
 
+    // What's been drawn so far this frame, and its lights at points and lightings: for a tool that
+    // writes the scene out to be lit elsewhere (a light bake), not for drawing.
+    struct Drawn
+    {
+        MeshHandle Mesh;
+        glm::mat4 Transform{1.0f};
+        Material Surface;
+        bool IsSkinned = false;
+    };
+    std::vector<Drawn> GetDrawn() const;
+    std::span<const PointLight> GetPointLights() const
+    {
+        return pointLights;
+    }
+    const Lighting& GetLighting(size_t slot) const
+    {
+        return lightings[std::min(slot, LIGHTING_SLOTS - 1)];
+    }
+
     // The app's: draws this frame's meshes inside the render pass, then forgets them.
     void Render(rhi::ICommandList& commands, rhi::Extent swapchainExtent, rhi::SurfaceTransform surfaceTransform);
 
@@ -210,7 +240,11 @@ private:
     // The same, for skinned meshes.
     std::array<rhi::PipelineHandle, PIPELINE_COUNT> skinnedPipelines{};
     rhi::SamplerHandle sampler;
+    // A lightmap's: smooth between its texels, kept to its edges (its pieces lie side by side).
+    rhi::SamplerHandle lightmapSampler;
     rhi::TextureHandle whiteTexture;
+    // A material's lightmaps where it has none: baked nowhere (its alpha 0).
+    rhi::TextureHandle unbakedTexture;
     HandlePool<GpuMesh, MeshTag> meshes;
     Camera3D camera;
     std::array<Lighting, LIGHTING_SLOTS> lightings{};

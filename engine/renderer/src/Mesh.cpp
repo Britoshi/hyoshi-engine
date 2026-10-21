@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
+#include <unordered_map>
 #include <vector>
 
 namespace hyoshi::renderer
@@ -117,6 +119,49 @@ std::vector<MeshVertex> ClipPolygon(const std::vector<MeshVertex>& polygon, glm:
 }
 
 } // namespace
+
+MeshData WithLightUvs(const MeshData& mesh, std::span<const glm::vec2> cornerUvs)
+{
+    MeshData lit;
+    if (cornerUvs.size() != mesh.Indices.size())
+    {
+        return lit;
+    }
+    // Each vertex once for each place its corners have in the lightmap (to the bit).
+    struct Corner
+    {
+        uint32_t Index = 0;
+        uint32_t U = 0;
+        uint32_t V = 0;
+        bool operator==(const Corner&) const = default;
+    };
+    struct CornerHash
+    {
+        size_t operator()(const Corner& corner) const
+        {
+            return static_cast<size_t>((uint64_t{corner.Index} * 0x9E3779B97F4A7C15ULL) ^
+                                       (uint64_t{corner.U} * 0xC2B2AE3D27D4EB4FULL) ^ (uint64_t{corner.V} << 17U));
+        }
+    };
+    std::unordered_map<Corner, uint32_t, CornerHash> made;
+    lit.Indices.reserve(mesh.Indices.size());
+    for (size_t i = 0; i < mesh.Indices.size(); ++i)
+    {
+        Corner corner;
+        corner.Index = mesh.Indices[i];
+        std::memcpy(&corner.U, &cornerUvs[i].x, sizeof(float));
+        std::memcpy(&corner.V, &cornerUvs[i].y, sizeof(float));
+        const auto [found, isNew] = made.try_emplace(corner, static_cast<uint32_t>(lit.Vertices.size()));
+        if (isNew)
+        {
+            MeshVertex vertex = mesh.Vertices[corner.Index];
+            vertex.LightUv = cornerUvs[i];
+            lit.Vertices.push_back(vertex);
+        }
+        lit.Indices.push_back(found->second);
+    }
+    return lit;
+}
 
 uint32_t PackMeshColor(Color color)
 {

@@ -8,13 +8,15 @@
 
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <vector>
 
 namespace hyoshi::renderer
 {
 
-// A 3D mesh's vertex (decision 0003), 36 bytes: where it is, which way its surface faces, where it
-// samples the material's texture, and a color that multiplies the material's.
+// A 3D mesh's vertex (decision 0003), 44 bytes: where it is, which way its surface faces, where it
+// samples the material's texture, a color that multiplies the material's, and where its light is in
+// the material's lightmaps (baked light: Material::Lightmaps).
 struct MeshVertex
 {
     glm::vec3 Position{0.0f};
@@ -22,6 +24,7 @@ struct MeshVertex
     glm::vec2 Uv{0.0f};
     // RGBA8, red first in memory, as SpriteBatch packs colors.
     uint32_t Color = 0xFFFFFFFF;
+    glm::vec2 LightUv{0.0f};
 };
 
 // Triangles, three indices each, wound counter-clockwise seen from their front.
@@ -32,6 +35,11 @@ struct MeshData
 };
 
 uint32_t PackMeshColor(Color color);
+
+// `mesh` with each triangle's corners where their light is in a lightmap (`cornerUvs`, one for each of
+// its indices, in their order: a light bake's), a vertex whose corners lie in different places made
+// one for each. Empty if there aren't as many as its indices.
+MeshData WithLightUvs(const MeshData& mesh, std::span<const glm::vec2> cornerUvs);
 
 // Shapes for meshes made in code. Each adds to `mesh`, moved, turned, and sized by `transform`
 // (normals follow), wound counter-clockwise seen from outside.
