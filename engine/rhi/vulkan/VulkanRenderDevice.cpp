@@ -640,11 +640,21 @@ Result<void> VulkanRenderDevice::CreateLogicalDevice()
     queueInfo.queueCount = 1;
     queueInfo.pQueuePriorities = &priority;
 
+    // Anisotropic filtering, where the GPU has it: textures stay sharp seen at a slant.
+    VkPhysicalDeviceFeatures supported{};
+    vkGetPhysicalDeviceFeatures(physicalDevice, &supported);
+    VkPhysicalDeviceFeatures features{};
+    features.samplerAnisotropy = supported.samplerAnisotropy;
+    maxAnisotropy = supported.samplerAnisotropy == VK_TRUE
+                        ? std::max(physicalDeviceProperties.limits.maxSamplerAnisotropy, 1.0f)
+                        : 1.0f;
+
     VkDeviceCreateInfo createInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     createInfo.queueCreateInfoCount = 1;
     createInfo.pQueueCreateInfos = &queueInfo;
     createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     createInfo.ppEnabledExtensionNames = extensions.data();
+    createInfo.pEnabledFeatures = &features;
 
     if (Result<void> result = CheckVk(vkCreateDevice(physicalDevice, &createInfo, nullptr, &device), "vkCreateDevice");
         !result)

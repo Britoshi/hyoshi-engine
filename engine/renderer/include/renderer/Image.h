@@ -45,7 +45,13 @@ Image ResizeImage(const Image& image, uint32_t width, uint32_t height);
 Image MakeDistanceField(const Image& image, uint32_t maxSize, uint32_t spread, float speckFraction = 0.0f);
 
 // Uploads an RGBA8 or single-channel image as a texture. Single-channel textures read as white
-// with the value in alpha (RhiTypes.h).
-Result<rhi::TextureHandle> CreateTexture(rhi::IRenderDevice& device, const Image& image, const char* debugName);
+// with the value in alpha (RhiTypes.h). With isMipmapped, smaller copies of it go up too, each the
+// last averaged down by half (TextureDesc::MipLevels), so it doesn't shimmer seen far off or at a
+// slant (a floor, a wall); where the backend keeps one level, only the image does.
+Result<rhi::TextureHandle> CreateTexture(rhi::IRenderDevice& device, const Image& image, const char* debugName,
+                                         bool isMipmapped = false);
+
+// An image averaged down by half (each side, rounded down, at least 1), a texel from each 2 x 2.
+Image HalveImage(const Image& image);
 
 } // namespace hyoshi::renderer

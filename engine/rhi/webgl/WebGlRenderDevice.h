@@ -122,6 +122,11 @@ public:
     Result<void> UploadBuffer(BufferHandle buffer, const void* data, size_t size, size_t offset) override;
     Result<void> UpdateTexture(TextureHandle texture, const void* pixels, uint32_t x, uint32_t y, uint32_t width,
                                uint32_t height) override;
+    // No mipmaps on the web yet: every texture keeps one level (TextureDesc::MipLevels).
+    Result<void> UpdateTextureLevel(TextureHandle /*texture*/, uint32_t /*level*/, const void* /*pixels*/) override
+    {
+        return {};
+    }
 
     FrameStatus BeginFrame() override;
     ICommandList& GetCommandList() override;

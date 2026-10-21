@@ -76,6 +76,9 @@ public:
     // Replaces a rectangle of texels (tightly packed rows). Waits for the copy; safe mid-frame.
     virtual Result<void> UpdateTexture(TextureHandle texture, const void* pixels, uint32_t x, uint32_t y,
                                        uint32_t width, uint32_t height) = 0;
+    // Replaces a whole smaller copy (TextureDesc::MipLevels; level 1 is half the size, rounded down,
+    // at least 1). Does nothing where the backend keeps one level, or past the texture's levels.
+    virtual Result<void> UpdateTextureLevel(TextureHandle texture, uint32_t level, const void* pixels) = 0;
 
     virtual FrameStatus BeginFrame() = 0;
     virtual ICommandList& GetCommandList() = 0;

@@ -206,6 +206,8 @@ Result<void> Renderer3D::Initialize(rhi::IRenderDevice& renderDevice)
     rhi::SamplerDesc samplerDesc;
     samplerDesc.MinMagFilter = rhi::Filter::Linear;
     samplerDesc.Address = rhi::AddressMode::Repeat;
+    // A floor or a wall going away stays sharp.
+    samplerDesc.MaxAnisotropy = 8.0f;
     Result<rhi::SamplerHandle> createdSampler = device->CreateSampler(samplerDesc);
     if (!createdSampler)
     {

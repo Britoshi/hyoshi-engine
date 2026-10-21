@@ -147,3 +147,27 @@ TEST_CASE("MakeDistanceField downsamples large artwork")
     CHECK(At(field, field.Width / 2, field.Height / 2) == 255);
     CHECK(At(field, 0, 0) == 0);
 }
+
+TEST_CASE("HalveImage averages each 2 x 2, down to 1 x 1")
+{
+    // Opaque on the left half, clear on the right: each half's texel keeps its side.
+    const Image image = MakeRectangle(4, 2, 0, 0, 2, 2);
+    const Image half = hyoshi::renderer::HalveImage(image);
+    CHECK(half.Width == 2);
+    CHECK(half.Height == 1);
+    CHECK(half.Pixels[3] == 255);
+    CHECK(half.Pixels[7] == 0);
+
+    // A column of an odd height: rounded down, its last row left out; and 1 x 1 stays so.
+    Image column;
+    column.Width = 1;
+    column.Height = 3;
+    column.Pixels = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 200};
+    const Image halved = hyoshi::renderer::HalveImage(column);
+    CHECK(halved.Width == 1);
+    CHECK(halved.Height == 1);
+    CHECK(halved.Pixels[3] == 0);
+    const Image last = hyoshi::renderer::HalveImage(hyoshi::renderer::HalveImage(halved));
+    CHECK(last.Width == 1);
+    CHECK(last.Height == 1);
+}

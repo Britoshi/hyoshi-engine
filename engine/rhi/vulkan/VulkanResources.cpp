@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -138,12 +139,15 @@ Result<TextureHandle> VulkanRenderDevice::CreateTexture(const TextureDesc& desc)
     HYOSHI_ASSERT(desc.Width > 0 && desc.Height > 0);
 
     const VkFormat format = ToVkFormat(desc.Format);
+    // Down to 1 x 1 at most.
+    const uint32_t mipLevels =
+        std::clamp(desc.MipLevels, 1U, static_cast<uint32_t>(std::bit_width(std::max(desc.Width, desc.Height))));
 
     VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
     imageInfo.format = format;
     imageInfo.extent = {desc.Width, desc.Height, 1};
-    imageInfo.mipLevels = 1;
+    imageInfo.mipLevels = mipLevels;
     imageInfo.arrayLayers = 1;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -157,6 +161,7 @@ Result<TextureHandle> VulkanRenderDevice::CreateTexture(const TextureDesc& desc)
     data.Width = desc.Width;
     data.Height = desc.Height;
     data.BytesPerPixel = BytesPerPixel(desc.Format);
+    data.MipLevels = mipLevels;
     if (Result<void> result =
             CheckVk(vmaCreateImage(allocator, &imageInfo, &allocationInfo, &data.Image, &data.Allocation, nullptr),
                     "vmaCreateImage");
@@ -169,7 +174,7 @@ Result<TextureHandle> VulkanRenderDevice::CreateTexture(const TextureDesc& desc)
     viewInfo.image = data.Image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = format;
-    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, 1};
     if (desc.Format == TextureFormat::R8Unorm)
     {
         // Single-channel textures read as white with the value in alpha (glyphs, masks).
@@ -193,7 +198,7 @@ Result<TextureHandle> VulkanRenderDevice::CreateTexture(const TextureDesc& desc)
                 barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 barrier.image = data.Image;
-                barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, data.MipLevels, 0, 1};
                 vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
             });
@@ -217,11 +222,15 @@ Result<SamplerHandle> VulkanRenderDevice::CreateSampler(const SamplerDesc& desc)
     VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     samplerInfo.magFilter = ToVkFilter(desc.MinMagFilter);
     samplerInfo.minFilter = ToVkFilter(desc.MinMagFilter);
-    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    // Between a texture's levels (TextureDesc::MipLevels), where it has them.
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
     samplerInfo.addressModeU = ToVkAddressMode(desc.Address);
     samplerInfo.addressModeV = ToVkAddressMode(desc.Address);
     samplerInfo.addressModeW = ToVkAddressMode(desc.Address);
-    samplerInfo.maxLod = 0.0f;
+    samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+    const float anisotropy = std::min(desc.MaxAnisotropy, maxAnisotropy);
+    samplerInfo.anisotropyEnable = anisotropy > 1.0f ? VK_TRUE : VK_FALSE;
+    samplerInfo.maxAnisotropy = std::max(anisotropy, 1.0f);
 
     SamplerData data;
     if (Result<void> result = CheckVk(vkCreateSampler(device, &samplerInfo, nullptr, &data.Sampler), "vkCreateSampler");
@@ -342,12 +351,33 @@ Result<void> VulkanRenderDevice::UpdateTexture(TextureHandle texture, const void
         return Error{"UpdateTexture: invalid or destroyed texture"};
     }
     HYOSHI_ASSERT(x + width <= data->Width && y + height <= data->Height, "UpdateTexture region is out of bounds");
+    return CopyIntoTexture(*data, pixels, 0, x, y, width, height);
+}
+
+Result<void> VulkanRenderDevice::UpdateTextureLevel(TextureHandle texture, uint32_t level, const void* pixels)
+{
+    const TextureData* data = textures.Get(texture);
+    if (data == nullptr)
+    {
+        return Error{"UpdateTextureLevel: invalid or destroyed texture"};
+    }
+    if (level >= data->MipLevels)
+    {
+        return {};
+    }
+    return CopyIntoTexture(*data, pixels, level, 0, 0, std::max(data->Width >> level, 1U),
+                           std::max(data->Height >> level, 1U));
+}
+
+Result<void> VulkanRenderDevice::CopyIntoTexture(const TextureData& data, const void* pixels, uint32_t level,
+                                                 uint32_t x, uint32_t y, uint32_t width, uint32_t height)
+{
     if (width == 0 || height == 0)
     {
         return {};
     }
 
-    const size_t size = size_t{width} * height * data->BytesPerPixel;
+    const size_t size = size_t{width} * height * data.BytesPerPixel;
     Result<StagingBuffer> staging = CreateStagingBuffer(allocator, pixels, size);
     if (!staging)
     {
@@ -355,7 +385,7 @@ Result<void> VulkanRenderDevice::UpdateTexture(TextureHandle texture, const void
     }
 
     const VkBuffer source = staging.Value().Buffer;
-    const VkImage image = data->Image;
+    const VkImage image = data.Image;
     Result<void> result = SubmitImmediate(
         [&](VkCommandBuffer commandBuffer)
         {
@@ -369,12 +399,12 @@ Result<void> VulkanRenderDevice::UpdateTexture(TextureHandle texture, const void
             toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             toTransfer.image = image;
-            toTransfer.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            toTransfer.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, level, 1, 0, 1};
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                  0, 0, nullptr, 0, nullptr, 1, &toTransfer);
 
             VkBufferImageCopy region{};
-            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
             region.imageOffset = {static_cast<int32_t>(x), static_cast<int32_t>(y), 0};
             region.imageExtent = {width, height, 1};
             vkCmdCopyBufferToImage(commandBuffer, source, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);

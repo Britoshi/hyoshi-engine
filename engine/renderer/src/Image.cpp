@@ -4,6 +4,7 @@
 #include <stb_image_resize2.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -370,7 +371,36 @@ Image MakeDistanceField(const Image& image, uint32_t maxSize, uint32_t spread, f
     return field;
 }
 
-Result<rhi::TextureHandle> CreateTexture(rhi::IRenderDevice& device, const Image& image, const char* debugName)
+Image HalveImage(const Image& image)
+{
+    Image half;
+    half.Width = std::max(image.Width / 2, 1U);
+    half.Height = std::max(image.Height / 2, 1U);
+    half.Channels = image.Channels;
+    half.Pixels.resize(size_t{half.Width} * half.Height * image.Channels);
+    for (uint32_t y = 0; y < half.Height; ++y)
+    {
+        const uint32_t top = std::min(y * 2, image.Height - 1);
+        const uint32_t bottom = std::min((y * 2) + 1, image.Height - 1);
+        for (uint32_t x = 0; x < half.Width; ++x)
+        {
+            const uint32_t left = std::min(x * 2, image.Width - 1);
+            const uint32_t right = std::min((x * 2) + 1, image.Width - 1);
+            for (uint32_t channel = 0; channel < image.Channels; ++channel)
+            {
+                const auto at = [&](uint32_t column, uint32_t row)
+                { return uint32_t{image.Pixels[(((size_t{row} * image.Width) + column) * image.Channels) + channel]}; };
+                const uint32_t sum = at(left, top) + at(right, top) + at(left, bottom) + at(right, bottom);
+                half.Pixels[(((size_t{y} * half.Width) + x) * image.Channels) + channel] =
+                    static_cast<uint8_t>((sum + 2) / 4);
+            }
+        }
+    }
+    return half;
+}
+
+Result<rhi::TextureHandle> CreateTexture(rhi::IRenderDevice& device, const Image& image, const char* debugName,
+                                         bool isMipmapped)
 {
     if (image.IsEmpty() || (image.Channels != 4 && image.Channels != 1))
     {
@@ -381,14 +411,21 @@ Result<rhi::TextureHandle> CreateTexture(rhi::IRenderDevice& device, const Image
     desc.Height = image.Height;
     desc.Format = image.Channels == 4 ? rhi::TextureFormat::Rgba8Unorm : rhi::TextureFormat::R8Unorm;
     desc.DebugName = debugName;
+    // Down to 1 x 1.
+    desc.MipLevels = isMipmapped ? static_cast<uint32_t>(std::bit_width(std::max(image.Width, image.Height))) : 1;
     Result<rhi::TextureHandle> texture = device.CreateTexture(desc);
     if (!texture)
     {
         return texture;
     }
-    if (Result<void> result =
-            device.UpdateTexture(texture.Value(), image.Pixels.data(), 0, 0, image.Width, image.Height);
-        !result)
+    Result<void> result = device.UpdateTexture(texture.Value(), image.Pixels.data(), 0, 0, image.Width, image.Height);
+    Image level;
+    for (uint32_t index = 1; result && index < desc.MipLevels; ++index)
+    {
+        level = HalveImage(index == 1 ? image : level);
+        result = device.UpdateTextureLevel(texture.Value(), index, level.Pixels.data());
+    }
+    if (!result)
     {
         device.Destroy(texture.Value());
         return result.GetError();

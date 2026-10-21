@@ -94,6 +94,7 @@ public:
     Result<void> UploadBuffer(BufferHandle buffer, const void* data, size_t size, size_t offset) override;
     Result<void> UpdateTexture(TextureHandle texture, const void* pixels, uint32_t x, uint32_t y, uint32_t width,
                                uint32_t height) override;
+    Result<void> UpdateTextureLevel(TextureHandle texture, uint32_t level, const void* pixels) override;
 
     FrameStatus BeginFrame() override;
     ICommandList& GetCommandList() override;
@@ -131,6 +132,7 @@ private:
         uint32_t Width = 0;
         uint32_t Height = 0;
         uint32_t BytesPerPixel = 4;
+        uint32_t MipLevels = 1;
     };
 
     struct SamplerData
@@ -190,6 +192,9 @@ private:
     void WritePendingScreenshot();
 
     Result<void> SubmitImmediate(const std::function<void(VkCommandBuffer)>& record);
+    // Copies tightly packed texels into a rectangle of one of a texture's levels, waiting for it.
+    Result<void> CopyIntoTexture(const TextureData& data, const void* pixels, uint32_t level, uint32_t x, uint32_t y,
+                                 uint32_t width, uint32_t height);
     // Textures (for the fragment stage), then storage buffers (for the vertex stage), at set 0.
     Result<VkDescriptorSetLayout> GetSetLayout(uint32_t textureCount, uint32_t storageBufferCount);
     VkDescriptorSet AllocateDescriptorSet(VkDescriptorSetLayout layout);
@@ -210,6 +215,8 @@ private:
     VkQueue queue = VK_NULL_HANDLE;
     VmaAllocator allocator = VK_NULL_HANDLE;
     bool hasPortabilitySubset = false;
+    // Samples at a slant at most (SamplerDesc::MaxAnisotropy), where the GPU filters so; 1 where not.
+    float maxAnisotropy = 1.0f;
 
     VulkanSwapchain swapchain;
     VkRenderPass swapchainRenderPass = VK_NULL_HANDLE;

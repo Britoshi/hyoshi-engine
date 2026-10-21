@@ -103,6 +103,10 @@ struct TextureDesc
     uint32_t Height = 0;
     TextureFormat Format = TextureFormat::Rgba8Unorm;
     const char* DebugName = "texture";
+    // Smaller copies of it, for drawing it smaller without shimmering: each level half the last
+    // (IRenderDevice::UpdateTextureLevel), down to 1 x 1 at most; 1, none. Backends without them
+    // (the web's, for now) keep one.
+    uint32_t MipLevels = 1;
 };
 
 enum class Filter
@@ -121,6 +125,9 @@ struct SamplerDesc
 {
     Filter MinMagFilter = Filter::Linear;
     AddressMode Address = AddressMode::ClampToEdge;
+    // Sharper seen at a slant (a floor going away): up to this many samples along it, where the GPU
+    // can; 1, none.
+    float MaxAnisotropy = 1.0f;
 };
 
 enum class IndexType
