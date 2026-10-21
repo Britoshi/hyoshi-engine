@@ -2,6 +2,7 @@
 
 #include "core/Time.h"
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -61,6 +62,21 @@ struct AudioClockSnapshot
     int64_t CallbackFrames = 0;
     // Music frames played per frame rendered (IAudioBackend::SetMusicRate): 1 normally.
     double MusicRate = 1.0;
+};
+
+// How loud the music was in octave bands of pitch over one callback (IAudioBackend::GetMusicLevels),
+// for showing it, as lights to the music do. Measured before the music's volume and its low-pass, so
+// it's the same at any volume. 64-bit aligned, to be copied through a SeqLock.
+struct MusicLevels
+{
+    // The bands' middles, an octave apart: from a kick drum's thump to cymbals' hiss (Hz).
+    static constexpr std::array<float, 8> BAND_HZ{62.5f, 125.0f, 250.0f, 500.0f, 1000.0f, 2000.0f, 4000.0f, 8000.0f};
+
+    // The music the callback played: its first frame, and how many.
+    DspFrame MusicFrame = 0;
+    DspFrame MusicFrames = 0;
+    // Each band's RMS, lowest first: a full-scale sine at a band's middle is about 0.7 in it.
+    std::array<float, BAND_HZ.size()> Bands{};
 };
 
 struct AudioConfig

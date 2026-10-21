@@ -6,6 +6,7 @@
 #include "core/Result.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace hyoshi::audio
@@ -73,6 +74,13 @@ public:
 
     // Timing contract for the rhythm core.
     virtual AudioClockSnapshot GetClockSnapshot() const = 0;
+    // How loud the music was in each band of pitch (MusicLevels) as it played musicFrame, if it did
+    // lately: for showing the music, as lights to it do. Ask for the frame being heard
+    // (SongClock::MusicFrameForSongTime), not the one being rendered. None where it isn't measured.
+    virtual std::optional<MusicLevels> GetMusicLevels([[maybe_unused]] DspFrame musicFrame) const
+    {
+        return std::nullopt;
+    }
     virtual int64_t GetEstimatedOutputLatencyUs() const = 0;
 
     // True once after the output route changes (headphones, Bluetooth) or an interruption.

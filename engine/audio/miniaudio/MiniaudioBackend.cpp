@@ -461,6 +461,11 @@ AudioClockSnapshot MiniaudioBackend::GetClockSnapshot() const
     return mixer ? mixer->GetSnapshot() : AudioClockSnapshot{};
 }
 
+std::optional<MusicLevels> MiniaudioBackend::GetMusicLevels(DspFrame musicFrame) const
+{
+    return mixer ? mixer->GetMusicLevels(musicFrame) : std::nullopt;
+}
+
 // Baseline estimate from DESIGN.md section 11.4: the device's buffering. Calibration covers the
 // rest.
 int64_t MiniaudioBackend::GetEstimatedOutputLatencyUs() const

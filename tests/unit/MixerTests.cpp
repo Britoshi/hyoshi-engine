@@ -2,7 +2,11 @@
 
 #include <doctest/doctest.h>
 
+#include <array>
+#include <cmath>
 #include <cstdint>
+#include <numbers>
+#include <optional>
 #include <vector>
 
 using hyoshi::DspFrame;
@@ -257,6 +261,47 @@ TEST_CASE("Music stops at its end and bus volumes scale it")
     RenderLeft(mixer, BLOCK, time);
     CHECK(mixer.GetSnapshot().IsMusicPlaying == 0);
     CHECK(mixer.GetSnapshot().MusicFrame == 300);
+}
+
+TEST_CASE("Mixer measures the music's levels by band, at the frame asked, at any volume")
+{
+    // A 1 kHz tone at half of full scale: about 0.35 in the 1 kHz band, at any volume.
+    PcmBuffer tone;
+    tone.SampleRate = RATE;
+    for (DspFrame i = 0; i < RATE; ++i)
+    {
+        const auto value =
+            static_cast<int16_t>(16384.0 * std::sin(2.0 * std::numbers::pi * 1000.0 * static_cast<double>(i) / RATE));
+        tone.Samples.push_back(value);
+        tone.Samples.push_back(value);
+    }
+
+    Mixer mixer(RATE, 4);
+    hyoshi::HostTimeNs time = 0;
+    mixer.Submit({.Type = AudioCommandType::SetMusic, .Buffer = &tone});
+    mixer.Submit({.Type = AudioCommandType::SetBusVolume, .TargetBus = Bus::Music, .Volume = 0.25f});
+    RenderLeft(mixer, BLOCK, time);
+    CHECK_FALSE(mixer.GetMusicLevels(0).has_value());
+
+    mixer.Submit({.Type = AudioCommandType::PlayMusic});
+    RenderLeft(mixer, BLOCK * 8, time);
+    const std::optional<hyoshi::audio::MusicLevels> levels = mixer.GetMusicLevels((BLOCK * 6) + 10);
+    REQUIRE(levels.has_value());
+    CHECK(levels->MusicFrame == BLOCK * 6);
+    CHECK(levels->MusicFrames == BLOCK);
+    const std::array<float, 8>& bands = levels->Bands;
+    CHECK(bands[4] == doctest::Approx(0.354f).epsilon(0.05));
+    // Each band falls off 6 dB an octave each side.
+    CHECK(bands[3] < bands[4] * 0.6f);
+    CHECK(bands[5] < bands[4] * 0.6f);
+    CHECK(bands[2] < bands[4] * 0.25f);
+    CHECK(bands[0] < bands[4] * 0.08f);
+    CHECK(bands[7] < bands[4] * 0.15f);
+
+    // Each callback's own, from the first played; none past what's played.
+    REQUIRE(mixer.GetMusicLevels(BLOCK - 1).has_value());
+    CHECK(mixer.GetMusicLevels(BLOCK - 1)->MusicFrame == 0);
+    CHECK_FALSE(mixer.GetMusicLevels(BLOCK * 20).has_value());
 }
 
 TEST_CASE("Releasing a buffer stops everything that reads it")

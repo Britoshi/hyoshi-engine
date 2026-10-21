@@ -25,6 +25,28 @@ Mixer::Mixer(uint32_t rate, uint32_t voiceCount, size_t commandCapacity)
     AudioClockSnapshot initial;
     initial.SampleRate = rate;
     snapshot.Store(initial);
+
+    for (size_t band = 0; band < bandFilters.size(); ++band)
+    {
+        const double middle = MusicLevels::BAND_HZ[band];
+        if (middle >= 0.45 * rate)
+        {
+            continue;
+        }
+        const double w0 = 2.0 * std::numbers::pi * middle / rate;
+        const double alpha = std::sin(w0) * std::sinh(std::numbers::ln2 * 0.5 * w0 / std::sin(w0));
+        const double a0 = 1.0 + alpha;
+        bandFilters[band].B0 = alpha / a0;
+        bandFilters[band].B2 = -alpha / a0;
+        bandFilters[band].A1 = -2.0 * std::cos(w0) / a0;
+        bandFilters[band].A2 = (1.0 - alpha) / a0;
+    }
+    // No callback has played any music yet.
+    for (MusicLevels& entry : levelEntries.Entries)
+    {
+        entry.MusicFrame = -1;
+    }
+    levels.Store(levelEntries);
 }
 
 bool Mixer::Submit(const AudioCommand& command)
@@ -83,6 +105,10 @@ void Mixer::Render(float* output, uint32_t frameCount, HostTimeNs callbackTime)
     if (musicCursor >= GetMusicFrameCount())
     {
         isMusicPlaying = false;
+    }
+    if (rendered > 0)
+    {
+        MeasureMusic(output, rendered, musicStart, musicFramesPlayed);
     }
     // The low-pass on the music alone: the voices mix in after.
     if (musicLowPass > 0.0f)
@@ -419,6 +445,64 @@ DspFrame Mixer::RenderMusicAtRate(float* output, DspFrame frameCount)
         musicCursor = std::min(musicCursor + index, end);
     }
     return rendered;
+}
+
+void Mixer::MeasureMusic(const float* output, DspFrame frameCount, DspFrame musicStart, DspFrame musicFrames)
+{
+    MusicLevels& entry = levelEntries.Entries[nextLevel];
+    entry.MusicFrame = musicStart;
+    entry.MusicFrames = musicFrames;
+    entry.Bands.fill(0.0f);
+    // As it is, its volume divided out; silent, nothing to measure.
+    const float gain = GetBusGain(Bus::Music);
+    if (gain > 1.0e-4f)
+    {
+        const double scale = 0.5 / gain;
+        for (size_t band = 0; band < bandFilters.size(); ++band)
+        {
+            BandFilter& filter = bandFilters[band];
+            if (filter.B0 == 0.0)
+            {
+                continue;
+            }
+            double squares = 0.0;
+            for (DspFrame i = 0; i < frameCount; ++i)
+            {
+                const double x = (output[i * PcmBuffer::CHANNELS] + output[(i * PcmBuffer::CHANNELS) + 1]) * scale;
+                const double y =
+                    (filter.B0 * x) + (filter.B2 * filter.X2) - (filter.A1 * filter.Y1) - (filter.A2 * filter.Y2);
+                filter.X2 = filter.X1;
+                filter.X1 = x;
+                filter.Y2 = filter.Y1;
+                filter.Y1 = y;
+                squares += y * y;
+            }
+            entry.Bands[band] = static_cast<float>(std::sqrt(squares / static_cast<double>(frameCount)));
+        }
+    }
+    nextLevel = (nextLevel + 1) % LEVEL_HISTORY;
+    levels.Store(levelEntries);
+}
+
+std::optional<MusicLevels> Mixer::GetMusicLevels(DspFrame musicFrame) const
+{
+    // The latest callback at or before it, if it played it or the one before did (a callback's
+    // worth of slack for rounding between clocks).
+    const LevelHistory history = levels.Load();
+    const MusicLevels* found = nullptr;
+    for (const MusicLevels& entry : history.Entries)
+    {
+        if (entry.MusicFrame >= 0 && entry.MusicFrame <= musicFrame &&
+            (found == nullptr || entry.MusicFrame > found->MusicFrame))
+        {
+            found = &entry;
+        }
+    }
+    if (found == nullptr || musicFrame >= found->MusicFrame + (2 * std::max<DspFrame>(found->MusicFrames, 1)))
+    {
+        return std::nullopt;
+    }
+    return *found;
 }
 
 float Mixer::GetBusGain(Bus bus) const

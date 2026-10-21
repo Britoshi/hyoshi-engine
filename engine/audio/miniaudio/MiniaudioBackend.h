@@ -49,6 +49,7 @@ public:
     void SetMusicLowPass(float cutoffHz) override;
 
     AudioClockSnapshot GetClockSnapshot() const override;
+    std::optional<MusicLevels> GetMusicLevels(DspFrame musicFrame) const override;
     int64_t GetEstimatedOutputLatencyUs() const override;
     bool ConsumeRouteChangedFlag() override;
 

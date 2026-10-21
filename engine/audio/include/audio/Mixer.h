@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace hyoshi::audio
@@ -61,6 +62,10 @@ struct AudioCommand
 // At a rate other than 1, the music is resampled linearly, which shifts its pitch with its speed.
 // A low-pass (SetMusicLowPass, two one-pole stages) muffles the music alone, before the voices mix
 // in; off, it costs nothing.
+//
+// While the music plays, each callback measures its levels in octave bands (MusicLevels: a
+// band-pass biquad each, on the music alone, its volume divided out) and keeps the last few
+// callbacks' for the main thread, which asks for the frame it hears (GetMusicLevels).
 class Mixer
 {
 public:
@@ -90,7 +95,33 @@ public:
     AudioStats GetStats() const;
     void ResetStats();
 
+    // Any thread. The levels of the callback that played musicFrame, among the last LEVEL_HISTORY;
+    // none if none did, or the music hasn't played lately.
+    std::optional<MusicLevels> GetMusicLevels(DspFrame musicFrame) const;
+
+    // Callbacks' levels kept: at 48 kHz and 256 frames a callback, 85 ms of them, more than the
+    // device's latency between rendering a frame and its being heard.
+    static constexpr size_t LEVEL_HISTORY = 16;
+
 private:
+    struct LevelHistory
+    {
+        std::array<MusicLevels, LEVEL_HISTORY> Entries{};
+    };
+    // A band's band-pass (RBJ's, 0 dB at its middle, an octave wide), direct form I, and the sum of
+    // its output's squares this callback.
+    struct BandFilter
+    {
+        double B0 = 0.0;
+        double B2 = 0.0;
+        double A1 = 0.0;
+        double A2 = 0.0;
+        double X1 = 0.0;
+        double X2 = 0.0;
+        double Y1 = 0.0;
+        double Y2 = 0.0;
+    };
+
     struct Voice
     {
         const PcmBuffer* Buffer = nullptr;
@@ -109,6 +140,7 @@ private:
     DspFrame RenderMusic(float* output, DspFrame frameCount);
     DspFrame RenderMusicAtRate(float* output, DspFrame frameCount);
     void FilterMusic(float* output, DspFrame frameCount);
+    void MeasureMusic(const float* output, DspFrame frameCount, DspFrame musicStart, DspFrame musicFrames);
     void SetMusicCursor(DspFrame frame);
     float GetBusGain(Bus bus) const;
     static void MixInto(float* output, const int16_t* source, uint32_t frameCount, float gain);
@@ -116,6 +148,7 @@ private:
     const uint32_t sampleRate;
     SpscQueue<AudioCommand> commands;
     SeqLock<AudioClockSnapshot> snapshot;
+    SeqLock<LevelHistory> levels;
 
     // Audio thread state.
     std::vector<Voice> voices;
@@ -132,6 +165,11 @@ private:
     // channel.
     float musicLowPass = 0.0f;
     std::array<float, size_t{PcmBuffer::CHANNELS} * 2> musicLowPassState{};
+    // The music's levels: each band's filter (no coefficients for one past the rate's reach), and
+    // the history published, with where the next goes.
+    std::array<BandFilter, MusicLevels::BAND_HZ.size()> bandFilters{};
+    LevelHistory levelEntries{};
+    size_t nextLevel = 0;
     bool isMusicPlaying = false;
     // The last callback advanced the music, with no seek, pause, or music change since.
     bool wasMusicAdvancing = false;
